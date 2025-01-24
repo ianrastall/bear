@@ -2,195 +2,185 @@
  * File: board.c
  ****************************************************************************/
 /*
-   Description:
-   - Implementation of board-related functions.
+   Implementation of board-related functions.
 */
 
 #include "board.h"
 #include <ctype.h>  /* For isdigit() */
 #include <string.h> /* For strtok(), strncpy(), etc. */
+#include <stdio.h>  /* For logging */
 
-static int FRTo120(int file, int rank) {
+/* Converts file (0-7) and rank (0-7) to 120-based index */
+int FRTo120(int file, int rank) {
     return (rank + 2) * 10 + (file + 1);
 }
 
-/* 
-   Helper: Convert a single FEN character to our piece ID (W_PAWN..B_KING).
-   Returns EMPTY if it doesn't match a known piece.
-*/
-static int CharToPiece(char c) {
-    switch (c) {
-        case 'P': return W_PAWN;
-        case 'N': return W_KNIGHT;
-        case 'B': return W_BISHOP;
-        case 'R': return W_ROOK;
-        case 'Q': return W_QUEEN;
-        case 'K': return W_KING;
-        case 'p': return B_PAWN;
-        case 'n': return B_KNIGHT;
-        case 'b': return B_BISHOP;
-        case 'r': return B_ROOK;
-        case 'q': return B_QUEEN;
-        case 'k': return B_KING;
-    }
-    return EMPTY;
-}
-
-/* Reset the board to an empty or initial state. */
-void InitBoard(Board* b) {
-    for (int i = 0; i < BOARD_SIZE; i++) {
+/* Initialize the board to the standard starting position */
+void InitBoard(Board* b)
+{
+    /* Initialize all squares to EMPTY */
+    for(int i = 0; i < BOARD_SIZE; i++) {
         b->pieces[i] = EMPTY;
     }
+
+    /* Set up white pieces */
+    b->pieces[FRTo120(0,0)] = W_ROOK;
+    b->pieces[FRTo120(1,0)] = W_KNIGHT;
+    b->pieces[FRTo120(2,0)] = W_BISHOP;
+    b->pieces[FRTo120(3,0)] = W_QUEEN;
+    b->pieces[FRTo120(4,0)] = W_KING;
+    b->pieces[FRTo120(5,0)] = W_BISHOP;
+    b->pieces[FRTo120(6,0)] = W_KNIGHT;
+    b->pieces[FRTo120(7,0)] = W_ROOK;
+    for(int f = 0; f < 8; f++) {
+        b->pieces[FRTo120(f,1)] = W_PAWN;
+    }
+
+    /* Set up black pieces */
+    b->pieces[FRTo120(0,7)] = B_ROOK;
+    b->pieces[FRTo120(1,7)] = B_KNIGHT;
+    b->pieces[FRTo120(2,7)] = B_BISHOP;
+    b->pieces[FRTo120(3,7)] = B_QUEEN;
+    b->pieces[FRTo120(4,7)] = B_KING;
+    b->pieces[FRTo120(5,7)] = B_BISHOP;
+    b->pieces[FRTo120(6,7)] = B_KNIGHT;
+    b->pieces[FRTo120(7,7)] = B_ROOK;
+    for(int f = 0; f < 8; f++) {
+        b->pieces[FRTo120(f,6)] = B_PAWN;
+    }
+
+    /* Set side to move */
     b->side = WHITE;
-    b->enPas = -1;
-    b->fiftyMove = 0;
-    b->ply = 0;
-    b->hisPly = 0;
-    b->castlePerm = 0;
-    b->positionKey = 0ULL;
-    /* Any other init logic can go here. */
+
+    /* No en passant square */
+    b->enPas = EMPTY;
+
+    /* All castling rights available */
+    b->castlePerm = WKCA | WQCA | BKCA | BQCA;
+
+    LogMessage(LOG_DEBUG, "Board initialized to standard starting position.\n");
 }
 
-/* Set the board from a FEN string. */
-void SetFen(Board* b, const char* fen) {
+/* Set the board position based on a FEN string */
+void SetFen(Board* b, const char* fen, bool debugMode)
+{
+    /* Reset the board first */
     InitBoard(b);
 
-    if (!fen || strlen(fen) == 0) {
-        /* If FEN is invalid or empty, just leave it in init state. */
-        return;
+    /* Example FEN parsing logic */
+    /* Split FEN into fields: piece placement, active color, castling availability, en passant, halfmove clock, fullmove number */
+
+    char copy[1024];
+    strncpy(copy, fen, sizeof(copy));
+    copy[sizeof(copy)-1] = '\0'; /* Ensure null-termination */
+
+    char* token = strtok(copy, " ");
+    if(!token) return;
+
+    /* Piece placement */
+    int rank = 7; /* Start from rank 8 */
+    int file = 0;
+    for(int i = 0; i < strlen(token) && rank >=0; i++) {
+        char c = token[i];
+        if(c == '/') {
+            rank--;
+            file = 0;
+            continue;
+        }
+        if(isdigit(c)) {
+            int emptySquares = c - '0';
+            for(int e = 0; e < emptySquares; e++) {
+                b->pieces[FRTo120(file, rank)] = EMPTY;
+                file++;
+            }
+        }
+        else {
+            int piece = CharToPiece(c);
+            b->pieces[FRTo120(file, rank)] = piece;
+            file++;
+        }
     }
 
-    char fenCopy[256];
-    strncpy(fenCopy, fen, 255);
-    fenCopy[255] = '\0';
+    /* Active color */
+    token = strtok(NULL, " ");
+    if(token && token[0] == 'b') {
+        b->side = BLACK;
+    }
+    else {
+        b->side = WHITE;
+    }
 
-    /* 1) Piece placement */
-    char* token = strtok(fenCopy, " ");
-    if (!token) return;
-
-    {
-        int rank = 7;
-        int file = 0;
-        const char* ptr = token;
-
-        while (*ptr && rank >= 0) {
-            if (isdigit((unsigned char)*ptr)) {
-                /* e.g. '3' => 3 empty squares */
-                file += (*ptr - '0');
-                ptr++;
-            } else if (*ptr == '/') {
-                rank--;
-                file = 0;
-                ptr++;
-            } else {
-                int piece = CharToPiece(*ptr);
-                ptr++;
-                if (piece != EMPTY && file < 8) {
-                    b->pieces[FRTo120(file, rank)] = piece;
-                    file++;
-                }
+    /* Castling availability */
+    token = strtok(NULL, " ");
+    b->castlePerm = 0;
+    if(token) {
+        for(int i = 0; i < strlen(token); i++) {
+            switch(token[i]) {
+                case 'K': b->castlePerm |= WKCA; break;
+                case 'Q': b->castlePerm |= WQCA; break;
+                case 'k': b->castlePerm |= BKCA; break;
+                case 'q': b->castlePerm |= BQCA; break;
+                case '-': /* No castling */ break;
+                default:
+                    LogMessage(LOG_WARN, "Unknown castling character: %c\n", token[i]);
+                    break;
             }
         }
     }
 
-    /* 2) Side to move */
+    /* En passant target square */
     token = strtok(NULL, " ");
-    if (!token) return;
-    b->side = ((*token == 'w' || *token == 'W') ? WHITE : BLACK);
-
-    /* 3) Castling availability */
-    token = strtok(NULL, " ");
-    if (!token) return;
-    b->castlePerm = 0;
-    if (*token != '-') {
-        if (strchr(token, 'K')) b->castlePerm |= WKCA;
-        if (strchr(token, 'Q')) b->castlePerm |= WQCA;
-        if (strchr(token, 'k')) b->castlePerm |= BKCA;
-        if (strchr(token, 'q')) b->castlePerm |= BQCA;
+    if(token && token[0] != '-') {
+        int file = token[0] - 'a';
+        int rank = token[1] - '1';
+        b->enPas = FRTo120(file, rank);
+    }
+    else {
+        b->enPas = EMPTY;
     }
 
-    /* 4) En passant target square */
-    token = strtok(NULL, " ");
-    if (!token) return;
-    if (*token == '-') {
-        b->enPas = -1;
-    } else {
-        int f = token[0] - 'a';
-        int r = token[1] - '1';
-        b->enPas = FRTo120(f, r);
-    }
+    /* Halfmove clock and fullmove number are ignored for now */
 
-    /* 5) Halfmove clock */
-    token = strtok(NULL, " ");
-    if (!token) return;
-    b->fiftyMove = atoi(token);
-
-    /* 6) Fullmove number */
-    token = strtok(NULL, " ");
-    if (!token) return;
-    b->hisPly = (atoi(token) - 1) * 2;
-    if (b->side == BLACK) {
-        b->hisPly++;
-    }
-
-    /* If using Zobrist hashing, update b->positionKey here. */
+    LogMessage(LOG_DEBUG, "Board set from FEN: %s\n", fen);
 }
 
-/* Print the board in ASCII format for debugging or console output. */
-void PrintBoard(const Board* b) {
-    for (int rank = 7; rank >= 0; rank--) {
-        printf("%d  ", rank + 1);
-        for (int file = 0; file < 8; file++) {
-            int sq120 = FRTo120(file, rank);
-            int piece = b->pieces[sq120];
-            switch (piece) {
-                case EMPTY:     printf(". ");  break;
-                case W_PAWN:    printf("P ");  break;
-                case W_KNIGHT:  printf("N ");  break;
-                case W_BISHOP:  printf("B ");  break;
-                case W_ROOK:    printf("R ");  break;
-                case W_QUEEN:   printf("Q ");  break;
-                case W_KING:    printf("K ");  break;
-                case B_PAWN:    printf("p ");  break;
-                case B_KNIGHT:  printf("n ");  break;
-                case B_BISHOP:  printf("b ");  break;
-                case B_ROOK:    printf("r ");  break;
-                case B_QUEEN:   printf("q ");  break;
-                case B_KING:    printf("k ");  break;
-                default:        printf("? ");  break;
-            }
-        }
-        printf("\n");
+/* Convert character to piece code */
+int CharToPiece(char c) {
+    switch(tolower(c)) {
+        case 'p': return (islower(c) ? B_PAWN : W_PAWN);
+        case 'n': return (islower(c) ? B_KNIGHT : W_KNIGHT);
+        case 'b': return (islower(c) ? B_BISHOP : W_BISHOP);
+        case 'r': return (islower(c) ? B_ROOK : W_ROOK);
+        case 'q': return (islower(c) ? B_QUEEN : W_QUEEN);
+        case 'k': return (islower(c) ? B_KING : W_KING);
+        default: return EMPTY;
     }
-    printf("\n   a b c d e f g h\n\n");
+}
 
-    /* Side to move */
-    printf("Side to move: %s\n", b->side == WHITE ? "WHITE" : "BLACK");
+/* Placeholder: Implement a proper move legality check */
+bool IsMoveLegal(Board* b, Move move) {
+    /* Implement your move legality logic here */
+    /* For now, assume all moves are legal */
+    return true;
+}
 
-    /* Castling permissions */
-    printf("Castling rights: ");
-    if (b->castlePerm & WKCA) printf("K");
-    if (b->castlePerm & WQCA) printf("Q");
-    if (b->castlePerm & BKCA) printf("k");
-    if (b->castlePerm & BQCA) printf("q");
-    if (!b->castlePerm) printf("-");
-    printf("\n");
+/* Placeholder: Implement making a move on the board */
+void MakeMove(Board* b, Move move) {
+    /* Implement your move making logic here */
+    /* Example: Move the piece */
+    b->pieces[move.to] = b->pieces[move.from];
+    b->pieces[move.from] = EMPTY;
 
-    /* En passant square */
-    if (b->enPas != -1) {
-        int file = (b->enPas % 10) - 1;
-        int rankEP = (b->enPas / 10) - 2;
-        printf("En Passant: %c%d\n", 'a' + file, rankEP + 1);
-    } else {
-        printf("En Passant: -\n");
+    /* Handle promotions */
+    if(move.flag & (1 << 3)) { /* Promotion flag */
+        b->pieces[move.to] = move.promoted;
     }
 
-    /* Halfmove clock and Ply info */
-    printf("Halfmove (50-move) clock: %d\n", b->fiftyMove);
-    printf("Ply: %d, hisPly: %d\n", b->ply, b->hisPly);
+    /* Toggle side */
+    b->side = (b->side == WHITE) ? BLACK : WHITE;
 
-    /* Position Key (if used) */
-    printf("Position Key: %llu\n", (unsigned long long)b->positionKey);
+    /* Handle en passant, castling rights, etc. */
+    /* Implement your logic here */
 
-    printf("\n");
+    LogMessage(LOG_DEBUG, "Moved piece from %d to %d.\n", move.from, move.to);
 }
