@@ -22,8 +22,11 @@ typedef struct {
     int flag;       /* Bitmask for special move attributes (e.g., en passant, castling, promotion) */
 } Move;
 
+/* Forward declaration of Board struct */
+struct Board;
+
 /* Function prototypes related to Move conversions */
-Move UciMoveToMove(Board* board, const char* uci); /* Converts UCI move string to Move struct */
+Move UciMoveToMove(struct Board* board, const char* uci); /* Converts UCI move string to Move struct */
 void MoveToUciMove(Move move, char* uci);          /* Converts Move struct to UCI move string */
 
 #endif /* MOVE_H */

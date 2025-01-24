@@ -2,8 +2,8 @@
  * File: main.c
  ****************************************************************************/
 /*
-   Main entry point for the Bear chess engine.
-   Handles initialization, command-line arguments, and enters the UCI loop.
+    Main entry point for the Bear chess engine.
+    Handles initialization, command-line arguments, and enters the UCI loop.
 */
 
 #include <stdio.h>
@@ -53,7 +53,7 @@ int main(int argc, char* argv[])
     LogMessage(LOG_DEBUG, "Transposition Table initialized with %zu entries.\n", ttSize);
 
     /* Optionally set up the board with a FEN or start position */
-    // SetFen(&board, "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1", debugMode);
+    // SetFen(&board, "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1", true);
 
     /* Enter UCI loop */
     LogMessage(LOG_DEBUG, "Entering UCI loop...\n");

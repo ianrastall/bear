@@ -2,11 +2,12 @@
  * File: uci.c
  ****************************************************************************/
 /*
-    Implementation of the UCI interface for Bear chess engine.
-    The UciLoop reads lines from stdin and calls ParseUciCommand to handle
-    each command. Exits on "quit".
-    ParseUciCommand dispatches commands like "uci", "isready", "position",
-    "go", "stop", "ucinewgame", etc.
+    Description:
+    - Implementation of the UCI interface for Bear chess engine.
+    - The UciLoop reads lines from stdin and calls ParseUciCommand to handle
+      each command. Exits on "quit".
+    - ParseUciCommand dispatches commands like "uci", "isready", "position",
+      "go", "stop", "ucinewgame", etc.
 */
 
 #include "uci.h"
@@ -97,16 +98,15 @@ void ParseUciCommand(const char* line, Board* board, TransTable* tt)
             token = strtok(NULL, " "); /* Start of FEN string */
             if (token) {
                 /* Reconstruct the full FEN string */
-                int fenIndex = 0;
-                while (token && fenIndex < (int)(sizeof(fen)-1)) {
+                while (token && strlen(fen) < sizeof(fen) - 1) {
                     strcat(fen, token);
                     strcat(fen, " ");
                     token = strtok(NULL, " ");
-                    fenIndex += strlen(token) + 1;
                 }
                 /* Remove the trailing space */
-                if (fenIndex > 0 && fen[fenIndex-1] == ' ') {
-                    fen[fenIndex-1] = '\0';
+                size_t len = strlen(fen);
+                if (len > 0 && fen[len-1] == ' ') {
+                    fen[len-1] = '\0';
                 }
                 SetFen(board, fen, true); /* Assuming debugMode is enabled */
                 LogMessage(LOG_DEBUG, "Set board from FEN: %s\n", fen);

@@ -22,17 +22,7 @@
 #include "log.h" /* For logging */
 #include "move.h" /* Ensure Move is defined */
 
-/*
-    UciLoop:
-    - Reads lines from stdin and handles them until "quit" is received.
-    - Passes Board and TransTable to handle state and search.
-*/
 void UciLoop(Board* board, TransTable* tt);
-
-/*
-    ParseUciCommand:
-    - Parses a single UCI command line and performs corresponding actions.
-*/
 void ParseUciCommand(const char* line, Board* board, TransTable* tt);
 
 #endif /* UCI_H */
