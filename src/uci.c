@@ -3,36 +3,37 @@
  ****************************************************************************/
 /*
    Description:
-   - Implementation of the UCI interface.
-   - The main loop reads lines from stdin, parses them, and calls engine
-     functions accordingly.
-   - Must handle "uci", "isready", "position", "go", "stop", "quit" commands,
-     plus any custom commands.
+   - Implementation of the UCI interface for Bear chess engine.
+   - The UciLoop reads lines from stdin and calls ParseUciCommand to handle
+     each command. Exits on "quit".
+   - ParseUciCommand dispatches commands like "uci", "isready", "position",
+     "go", "stop", "ucinewgame", etc.
 
-   Implementation details to fill later:
-   1) Handling each command separately.
-   2) Printing UCI-compliant responses (id name, id author, uciok, etc.).
-   3) Sending "bestmove" at the end of a search.
+   Placeholder logic is provided; you can fill in details for position setup,
+   search invocation, etc.
 */
 
 #include "uci.h"
 
+#include <stdbool.h>
+#include <stdlib.h>
+
 /*
    UciLoop:
-   - Reads lines from stdin in a loop.
-   - Calls ParseUciCommand(line) to handle each command.
-   - Usually exits when "quit" is received.
+   - Continuously reads lines from stdin.
+   - Breaks on "quit" command or EOF.
+   - Calls ParseUciCommand for each line.
 */
 void UciLoop(void)
 {
     char line[1024];
 
-    while (1) {
-        /* Clear line buffer before reading */
+    while (true) {
+        /* Clear the line buffer before reading */
         memset(line, 0, sizeof(line));
 
+        /* If we fail to read (EOF or error), exit loop */
         if (!fgets(line, sizeof(line), stdin)) {
-            /* If there's an input error or EOF, break */
             break;
         }
 
@@ -40,63 +41,77 @@ void UciLoop(void)
         char* nl = strchr(line, '\n');
         if (nl) *nl = '\0';
 
+        /* Check for "quit" explicitly */
         if (!strcmp(line, "quit")) {
-            break; /* Exit the UCI loop */
+            break;
         }
 
+        /* Parse the command */
         ParseUciCommand(line);
     }
 }
 
 /*
    ParseUciCommand:
-   - Interprets a single line of command input and performs actions accordingly.
-   - Typical UCI commands:
-     "uci", "isready", "position", "go", "stop", "ucinewgame", etc.
+   - Identifies UCI commands from the input line and
+     performs the corresponding actions.
+   - Placeholder logic for advanced commands (position, go, etc.).
 */
 void ParseUciCommand(const char* line)
 {
+    /* "uci" command: 
+       - Engine must respond with "id name ...", "id author ...", then "uciok". */
     if (!strcmp(line, "uci")) {
-        /* 
-           Print engine info, in the format:
-           id name <engineName>
-           id author <engineAuthor>
-           uciok
-        */
         printf("id name Bear 0.01\n");
         printf("id author ChatGPT o1\n");
         printf("uciok\n");
     }
+    /* "isready" command:
+       - Engine must respond "readyok" when fully ready. */
     else if (!strcmp(line, "isready")) {
-        /* Engine should respond with "readyok" when ready */
+        // Possibly flush or wait for background threads to be ready
         printf("readyok\n");
     }
+    /* "position" command:
+       - Example: "position startpos moves e2e4 e7e5"
+       - or: "position fen <FEN> moves ..."
+       - Typically, we parse the FEN if present or use the standard start position,
+         then apply the moves listed after "moves". */
     else if (!strncmp(line, "position", 8)) {
-        /* 
-           "position startpos" or "position fen <FEN> moves ..."
-           You would parse the FEN or start position,
-           then make any subsequent moves.
-        */
-        // Example: position startpos moves e2e4 e7e5
-        // (Placeholder for actual logic)
+        // Example parsing logic:
+        // "position startpos"
+        // "position startpos moves e2e4 e7e5"
+        // "position fen <fenstring> moves ..."
+        // You would call InitBoard(&board) or SetFen(&board, "fenstring");
+        // Then replay subsequent moves to reach the final position.
+        // (Implementation placeholder)
     }
+    /* "go" command:
+       - Tells engine to start searching. Additional parameters might follow:
+         "go wtime 300000 btime 300000 winc 2000 binc 2000 movestogo 30 depth 10" etc.
+       - You parse those parameters, set up a SearchInfo, and call SearchPosition. */
     else if (!strncmp(line, "go", 2)) {
-        /* 
-           Start the search. Could parse time controls or depth, e.g.,
-           go wtime 300000 btime 300000 winc 2000 binc 2000 movestogo ...
-           Then call SearchPosition with the appropriate parameters.
-        */
-        // (Placeholder for actual logic)
+        // Example: parse time controls, depth, etc.
+        // Then call SearchPosition(&board, &info).
+        // (Implementation placeholder)
     }
+    /* "stop" command:
+       - Tells engine to stop searching immediately and output the best move found. */
     else if (!strcmp(line, "stop")) {
-        /* Stop searching and output bestmove. */
-        // (Placeholder for actual logic, e.g., stop search thread if multithreaded)
+        // If the search is running in a separate thread or loop, you set a stop flag.
+        // Then eventually print "bestmove <move>".
+        // (Implementation placeholder)
     }
+    /* "ucinewgame" command:
+       - Signals a new game is about to start. Typically we reset the board,
+         transposition table, search stats, etc. */
     else if (!strcmp(line, "ucinewgame")) {
-        /* Reset the board, transposition table, etc. */
-        // (Placeholder for actual logic)
+        // Clear/Init board, TT, etc.
+        // (Implementation placeholder)
     }
+    /* Otherwise, it's an unknown or unhandled command. */
     else {
-        /* Unknown command or not yet handled. */
+        // Could do nothing or print something about unrecognized command.
+        // (No action needed if you want silent ignoring.)
     }
 }

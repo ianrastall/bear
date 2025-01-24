@@ -4,18 +4,21 @@
 /*
    Description:
    - Header for transposition table (TT) or hash table.
-   - Declares the data structures and functions to store/retrieve board states.
-   - This helps skip re-calculating positions that have already been analyzed.
+   - Declares the data structures and functions to store/retrieve board states,
+     typically via Zobrist hash keys to identify positions.
+   - Helps speed up search by caching results of previously analyzed positions.
 
-   Functions to declare here:
+   Functions declared:
    1) void InitTranspositionTable(TransTable* tt, size_t size);
-   2) void StoreHashEntry(TransTable* tt, uint64_t key, ... other info ...);
-   3) bool ProbeHashEntry(TransTable* tt, uint64_t key, ... out info ...);
-   4) etc.
+   2) void FreeTranspositionTable(TransTable* tt);
+   3) void StoreHashEntry(TransTable* tt, uint64_t key, int depth, int score,
+                          int flag, Move bestMove);
+   4) bool ProbeHashEntry(TransTable* tt, uint64_t key, int depth, int* outScore,
+                          Move* outMove);
 
    Data structures:
-   - TransTable struct, containing entries or pointers to them.
-   - TTEntry struct with fields: key (Zobrist), depth, score, etc.
+   - TTEntry: holds Zobrist key, search depth, score, node type flag, best move, etc.
+   - TransTable: an array of TTEntry plus metadata.
 */
 
 #ifndef TRANSPOSITION_H
@@ -24,33 +27,33 @@
 #include <stdint.h>  /* For uint64_t */
 #include <stddef.h>  /* For size_t */
 #include <stdbool.h> /* For bool */
-#include "board.h"   /* For Board, if needed */
+#include "movegen.h" /* For the Move struct */
 
 /* 
    Structure for a single transposition table entry.
-   You can adjust or expand the fields for storing more info:
-   - key: Zobrist hash key
-   - depth: search depth at which this entry was computed
-   - score: evaluation score or alpha/beta boundary
-   - flag: indicates node type (e.g., PV, CUT, ALL)
-   - move: best move found (if any)
-   - age: used to track whether an entry is from an older search
+   Fields:
+    - key:     Zobrist hash key
+    - depth:   depth at which this entry was calculated
+    - score:   stored evaluation or alpha/beta window boundary
+    - flag:    node type (0=exact, 1=alpha, 2=beta, etc.)
+    - bestMove:the best move found in this position
+    - age:     to help with replacing old entries
 */
 typedef struct {
     uint64_t key;
     int depth;
     int score;
-    int flag;      /* 0 = exact, 1 = alpha, 2 = beta (or any scheme you like) */
-    Move bestMove; /* optional: store best move for this position */
-    int age;       /* helps replace old entries */
+    int flag;      /* e.g., 0=Exact, 1=Alpha, 2=Beta */
+    Move bestMove; /* optional best move in this position */
+    int age;       /* helps detect older entries to replace */
 } TTEntry;
 
-/* 
-   Structure for the entire transposition table.
-   - entries: pointer to allocated array of TTEntry
-   - numEntries: total number of entries
-   - newWrite: count of newly written or overwritten entries
-   - age: increments every search, so we can track entry staleness
+/*
+   Structure for the entire transposition table:
+    - entries:   dynamically allocated array of TTEntry
+    - numEntries: number of entries allocated
+    - newWrite:   count how many times we've stored new data
+    - age:        increments each search iteration
 */
 typedef struct {
     TTEntry* entries;
@@ -59,14 +62,18 @@ typedef struct {
     int age;
 } TransTable;
 
-/* Function prototypes */
+/* Allocate and initialize the TT. size = desired number of entries. */
 void InitTranspositionTable(TransTable* tt, size_t size);
+
+/* Free the memory associated with the TT and reset fields. */
 void FreeTranspositionTable(TransTable* tt);
 
+/* Store a new entry (or replace an older one) in the TT. */
 void StoreHashEntry(TransTable* tt, uint64_t key, int depth, int score, 
                     int flag, Move bestMove);
 
-bool ProbeHashEntry(TransTable* tt, uint64_t key, int depth, int* outScore,
+/* Probe the TT for a matching entry with a key & sufficient depth. */
+bool ProbeHashEntry(TransTable* tt, uint64_t key, int depth, int* outScore, 
                     Move* outMove);
 
 #endif /* TRANSPOSITION_H */

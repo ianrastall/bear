@@ -4,18 +4,16 @@
 /*
    Description:
    - Header for move generation routines.
-   - Declarations for generating all possible moves from a given board state.
-   - Possibly separate captures from non-captures (for move ordering).
-   - Provide move validation utilities.
+   - Declarations for generating moves from a given board state (captures vs. all).
+   - Utility function to check if a square is attacked.
 
-   Functions to declare here:
-   1) int GenerateAllMoves(const Board* b, Move* moveList);
-   2) int GenerateCaptures(const Board* b, Move* moveList);
-   3) bool IsSquareAttacked(const Board* b, int square, int side);
+   Exports:
+     1) int GenerateAllMoves(const Board* b, Move* moveList);
+     2) int GenerateCaptures(const Board* b, Move* moveList);
+     3) bool IsSquareAttacked(const Board* b, int square, int side);
 
    Data structures:
-   - Move might be an integer with encoded fields (from, to, piece, flags),
-     or a struct with those fields.
+   - Move: a struct with fields for from, to, captured, promoted, flags.
 */
 
 #ifndef MOVEGEN_H
@@ -26,28 +24,27 @@
 /* 
    Define a simple Move structure with fields for 'from', 'to', 
    captured piece, promoted piece, and any special flags.
-   Flag bits could represent:
-     - 1 << 0 for en passant
-     - 1 << 1 for pawn start (2-square move)
-     - 1 << 2 for castling
-     - 1 << 3 for promotion
-   etc.
+   Possible flag bits:
+     - (1 << 0) : en passant
+     - (1 << 1) : pawn start (2-square move)
+     - (1 << 2) : castling
+     - (1 << 3) : promotion
 */
 typedef struct {
-    int from;       /* The source square (in 120-based indexing) */
-    int to;         /* The target square (in 120-based indexing) */
-    int captured;   /* Piece type captured, if any (EMPTY if none) */
-    int promoted;   /* Piece type if this move is a promotion (EMPTY if none) */
-    int flag;       /* Could be used for en passant, castling, etc. */
+    int from;       /* The source square (120-based indexing) */
+    int to;         /* The target square (120-based indexing) */
+    int captured;   /* Piece type captured, if any */
+    int promoted;   /* Piece type if this move is a promotion, else EMPTY */
+    int flag;       /* Bitmask for special move attributes */
 } Move;
 
-/* 
-   Function prototypes for move generation. 
-   The return value is typically the number of moves generated and stored
-   into moveList.
-*/
+/* Generate all pseudo-legal moves (including captures, non-captures, castling, etc.) */
 int GenerateAllMoves(const Board* b, Move* moveList);
+
+/* Generate captures (including en passant and promotions that capture) */
 int GenerateCaptures(const Board* b, Move* moveList);
+
+/* Check if a given square is attacked by a particular side */
 bool IsSquareAttacked(const Board* b, int square, int side);
 
 #endif /* MOVEGEN_H */

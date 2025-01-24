@@ -3,108 +3,123 @@
  ****************************************************************************/
 /*
    Description:
-   - Implementation of the primary search algorithm.
-   - The main function typically does iterative deepening, calling AlphaBeta
-     or principal variation search with increasing depths.
-   - Also includes a quiescence search for dealing with tactics in leaf nodes.
-   - Possibly includes specialized move ordering, killer moves, history table,
-     etc.
+   - Implements the primary search algorithm (iterative deepening, alpha-beta, etc.).
+   - May include quiescence search, principal variation (PV) tracking, move ordering, etc.
 
-   Implementation details to fill later:
-   1) The iterative deepening loop.
-   2) Time checks or node count checks for time management.
-   3) AlphaBeta or PVS recursion, storing principal variation moves.
-   4) Quiescence to handle captures and checks at leaf nodes.
+   Functions:
+     1) ClearSearchInfo: Initialize SearchInfo struct to defaults.
+     2) SearchPosition:  Main entry point for iterative deepening.
+     3) AlphaBeta:       Recursive alpha-beta with (optionally) PVS, etc.
+     4) Quiescence:      Search only capturing moves at leaf nodes.
 */
 
 #include "search.h"
 
 /*
    ClearSearchInfo:
-   - Resets the fields in a SearchInfo struct.
+   - Resets fields in a SearchInfo struct to safe defaults.
 */
 void ClearSearchInfo(SearchInfo* info)
 {
-    info->depth = 0;
+    info->depth     = 0;
     info->startTime = 0;
-    info->stopTime = 0;
-    info->nodes = 0;
-    info->timeSet = false;
-    info->stopped = false;
-    info->bestMove.from = 0;
-    info->bestMove.to = 0;
+    info->stopTime  = 0;
+    info->nodes     = 0;
+    info->timeSet   = false;
+    info->stopped   = false;
+
+    info->bestMove.from     = 0;
+    info->bestMove.to       = 0;
     info->bestMove.captured = 0;
     info->bestMove.promoted = 0;
-    info->bestMove.flag = 0;
+    info->bestMove.flag     = 0;
 }
 
 /*
    SearchPosition:
-   - The top-level function called to search for the best move.
-   - Typically handles iterative deepening and time management.
-   - Calls AlphaBeta (or PVS) with increasing depth until time is up or
-     the maximum depth is reached.
+   - The top-level function called to search for the best move:
+       1) Possibly do iterative deepening from depth=1..info->depth
+       2) Keep track of time and nodes
+       3) Possibly break if time is up
+       4) Return the final best move or score
 */
 int SearchPosition(Board* b, SearchInfo* info)
 {
     /* 
-       Pseudocode for iterative deepening (not implemented):
-       1) For d from 1 to info->depth:
-           - result = AlphaBeta(b, -infinity, +infinity, d, info);
-           - If we have a better move, store in info->bestMove.
-           - If time is up, break.
-       2) Return some kind of evaluation or best move data (e.g., info->bestMove).
-    */
+       Pseudocode for an iterative deepening approach (not implemented):
 
-    return 0; /* Placeholder return */
+       for (int d = 1; d <= info->depth; d++) {
+           int score = AlphaBeta(b, -INFINITY, +INFINITY, d, info);
+           if (info->stopped) break;
+           // info->bestMove might be updated inside AlphaBeta or after it
+       }
+
+       return final score or something relevant
+    */
+    return 0; /* Placeholder */
 }
 
 /*
    AlphaBeta:
-   - Implements alpha-beta pruning to find the best move at a given depth.
-   - This is a recursive function. 
-   - You will likely generate moves, make moves, recurse, unmake moves, etc.
-   - Evaluate positions at depth 0 or use Quiescence for positions in check.
+   - Classic alpha-beta search at a given depth.
+   - Make/undo moves, evaluate positions, track best move.
 */
 int AlphaBeta(Board* b, int alpha, int beta, int depth, SearchInfo* info)
 {
-    /*
-       Pseudocode (not fully implemented):
-       1) If depth == 0, return Quiescence(b, alpha, beta, info).
-       2) If time is up or if we should stop, return 0 or some safe value.
-       3) Generate moves.
-       4) For each move:
-           - Make the move.
-           - score = -AlphaBeta(..., -beta, -alpha, depth-1, info);
-           - Unmake the move.
-           - If score >= beta, alpha = beta, break (Beta cutoff).
-           - If score > alpha, alpha = score, store the move as best so far.
-       5) Return alpha.
+    /* 
+       Pseudocode:
+         if (depth == 0) {
+             return Quiescence(b, alpha, beta, info);
+         }
+         if (info->stopped) {
+             return 0;
+         }
+
+         GenerateAllMoves(b, moves);
+         if (movesCount == 0) checkmate/stalemate condition
+
+         for each move in moves:
+             MakeMove(b, move);
+             score = -AlphaBeta(b, -beta, -alpha, depth-1, info);
+             UnmakeMove(b, move);
+
+             if (score >= beta) {
+                 alpha = beta;
+                 break; // Beta cutoff
+             }
+             if (score > alpha) {
+                 alpha = score;
+                 // store best move
+             }
+
+         return alpha;
     */
-    return 0; /* Placeholder logic */
+    return 0; /* Placeholder implementation */
 }
 
 /*
    Quiescence:
-   - A specialized search at leaf nodes that considers only captures (and checks)
-     to avoid the horizon effect.
-   - Evaluate the position if no captures are possible.
+   - Specialized search that only explores capture moves (and maybe checks).
+   - Helps prevent the horizon effect where big captures are left unevaluated.
 */
 int Quiescence(Board* b, int alpha, int beta, SearchInfo* info)
 {
     /*
-       Pseudocode (not fully implemented):
-       1) Evaluate the position, store it in a local score variable.
-       2) If score >= beta, return beta.
-       3) If score > alpha, alpha = score.
-       4) Generate captures.
-       5) For each capture:
-           - Make the move.
-           - score = -Quiescence(..., -beta, -alpha, info);
-           - Unmake move.
-           - If score >= beta, return beta.
-           - If score > alpha, alpha = score.
-       6) Return alpha.
+       Pseudocode:
+         Evaluate current position => score
+         if (score >= beta) return beta;
+         if (score > alpha) alpha = score;
+
+         GenerateCaptures(b, captureList);
+         for each capture in captureList:
+             MakeMove(b, capture);
+             score = -Quiescence(b, -beta, -alpha, info);
+             UnmakeMove(b, capture);
+
+             if (score >= beta) return beta;
+             if (score > alpha) alpha = score;
+
+         return alpha;
     */
-    return 0; /* Placeholder logic */
+    return 0; /* Placeholder implementation */
 }

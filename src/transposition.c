@@ -3,43 +3,41 @@
  ****************************************************************************/
 /*
    Description:
-   - Implementation of the transposition table.
-   - Usually uses Zobrist hashing to generate a unique key for each board.
-   - Can store best move, node type (PV, CUT, ALL), depth, and evaluation score.
-   - Helps with search speedups.
+   - Implementation of the transposition table (TT) functions.
+   - Typically uses Zobrist hashing to generate a unique key for each board.
+   - Stores depth, score, and best move data to speed up future searches.
 
-   Implementation details to fill later:
-   1) Allocating and clearing the memory for the hash table.
-   2) Handling collisions by replace, cluster, or 2-tier system.
-   3) Reading/writing TT entries, including age or generation counters.
+   Implementation details:
+   1) Memory allocation for TT entries.
+   2) Simple replacement scheme for collisions (replace if depth >= current entry).
+   3) Retrieving (probing) an entry if the key matches and depth is sufficient.
 */
 
 #include "transposition.h"
-#include <stdio.h>
-#include <stdlib.h>
+#include <stdio.h>   /* For fprintf, stderr */
+#include <stdlib.h>  /* For calloc, free */
 
 /*
    InitTranspositionTable:
-   - Allocates memory for TT entries.
-   - 'size' might be the desired number of entries (power of two is common).
-   - Sets fields to defaults.
+   - Allocates TTEntry array of given size.
+   - Resets counters (newWrite, age).
 */
 void InitTranspositionTable(TransTable* tt, size_t size)
 {
     tt->entries = (TTEntry*)calloc(size, sizeof(TTEntry));
     if (!tt->entries) {
-        fprintf(stderr, "Error: Unable to allocate memory for TT\n");
+        fprintf(stderr, "Error: Unable to allocate memory for Transposition Table\n");
         tt->numEntries = 0;
         return;
     }
     tt->numEntries = size;
-    tt->newWrite = 0;
-    tt->age = 0;
+    tt->newWrite   = 0;
+    tt->age        = 0;
 }
 
 /*
    FreeTranspositionTable:
-   - Frees the allocated TT memory to prevent leaks.
+   - Frees the allocated TT array (if any) and resets fields.
 */
 void FreeTranspositionTable(TransTable* tt)
 {
@@ -48,61 +46,59 @@ void FreeTranspositionTable(TransTable* tt)
         tt->entries = NULL;
     }
     tt->numEntries = 0;
-    tt->newWrite = 0;
-    tt->age = 0;
+    tt->newWrite   = 0;
+    tt->age        = 0;
 }
 
 /*
    StoreHashEntry:
-   - Finds a slot in the transposition table for the given key.
-   - If there's a collision, decides whether to replace the existing entry
-     based on depth, age, or some replacement scheme.
-   - Writes data (depth, score, flag, bestMove) to the TTEntry.
+   - Basic hash function using key % numEntries as index.
+   - If the slot is empty (key=0), or matches the same key, or new depth >= old depth,
+     we overwrite. Otherwise, do nothing (simple approach).
+   - In practice, you'd want a more robust collision scheme (e.g., 2-slot, buckets, etc.).
 */
 void StoreHashEntry(TransTable* tt, uint64_t key, int depth, int score, 
                     int flag, Move bestMove)
 {
     if (!tt->entries || tt->numEntries == 0) return;
 
-    /* Basic approach: use key mod numEntries as index (very simple). 
-       In a real engine, you'd likely do more sophisticated collision handling.
-    */
     size_t index = key % tt->numEntries;
     TTEntry* entry = &tt->entries[index];
 
-    /* If empty or same key, or new depth >= existing depth, we replace. */
+    /* Check if entry is empty or same key or we have deeper depth => replace */
     if (entry->key == 0ULL || entry->key == key || depth >= entry->depth) {
-        entry->key = key;
-        entry->depth = depth;
-        entry->score = score;
-        entry->flag = flag;
+        entry->key      = key;
+        entry->depth    = depth;
+        entry->score    = score;
+        entry->flag     = flag;
         entry->bestMove = bestMove;
-        entry->age = tt->age;
+        entry->age      = tt->age;
         tt->newWrite++;
     }
-    else {
-        /* If we want to do a "replace always" or "replace if older" scheme,
-           we can handle that here. For now, do nothing if there's a conflict. */
-    }
+    /* else: keep the old entry (simple collision policy) */
 }
 
 /*
    ProbeHashEntry:
-   - Looks up the entry for the given key.
-   - If found and the stored depth is sufficient, returns true and 
-     outputs the stored score and move. Otherwise returns false.
+   - Check if there's an entry with the same key.
+   - If found and entry->depth >= requested depth, we consider it valid.
+   - Returns true if successful, false otherwise. outScore/outMove are set if found.
 */
 bool ProbeHashEntry(TransTable* tt, uint64_t key, int depth, int* outScore, 
                     Move* outMove)
 {
-    if (!tt->entries || tt->numEntries == 0) return false;
+    if (!tt->entries || tt->numEntries == 0) {
+        return false;
+    }
 
     size_t index = key % tt->numEntries;
     TTEntry* entry = &tt->entries[index];
 
+    /* Check for a match and if the stored depth is >= required depth. */
     if (entry->key == key && entry->depth >= depth) {
-        /* Found a valid entry with sufficient depth */
-        *outScore = entry->score;
+        if (outScore) {
+            *outScore = entry->score;
+        }
         if (outMove) {
             *outMove = entry->bestMove;
         }
