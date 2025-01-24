@@ -20,7 +20,8 @@ SOURCES = \
     movegen.c \
     search.c \
     transposition.c \
-    uci.c
+    uci.c \
+    log.c    # Added log.c
 
 # Generate a list of object files by replacing .c with .o
 OBJECTS = $(SOURCES:.c=.o)
@@ -51,4 +52,3 @@ clean:
 #
 # On Windows (MinGW), you'd run:
 # make && bear.exe
-

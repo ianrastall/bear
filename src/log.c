@@ -2,26 +2,41 @@
  * File: log.c
  ****************************************************************************/
 /*
-   Implementation of the centralized logging functionality.
-   Controls what messages are printed based on the current log level and debug mode.
+    Implementation of the centralized logging functionality.
+    Controls what messages are printed based on the current log level and debug mode.
 */
 
 #include "log.h"
+#include <string.h>
 
+/* Static variables to hold logging state */
 static bool isDebug = false;
 static LogLevel currentLevel = LOG_INFO;
 static FILE* logFile = NULL; /* Optional: can be extended to log to files */
 
+/*
+    InitLogging:
+    - Initializes the logging system with debug mode.
+*/
 void InitLogging(bool debug)
 {
     isDebug = debug;
 }
 
+/*
+    SetLogLevel:
+    - Sets the current logging level.
+*/
 void SetLogLevel(LogLevel level)
 {
     currentLevel = level;
 }
 
+/*
+    LogMessage:
+    - Logs a message with the specified logging level.
+    - Only logs messages that are at or above the current logging level.
+*/
 void LogMessage(LogLevel level, const char* format, ...)
 {
     if(level < currentLevel) return;

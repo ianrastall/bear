@@ -2,8 +2,8 @@
  * File: log.h
  ****************************************************************************/
 /*
-   Header for centralized logging functionality.
-   Provides functions to initialize logging, set log levels, and log messages.
+    Header for centralized logging functionality.
+    Provides functions to initialize logging, set log levels, and log messages.
 */
 
 #ifndef LOG_H

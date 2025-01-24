@@ -2,7 +2,7 @@
  * File: board.c
  ****************************************************************************/
 /*
-   Implementation of board-related functions.
+    Implementation of board-related functions.
 */
 
 #include "board.h"

@@ -2,23 +2,24 @@
  * File: uci.c
  ****************************************************************************/
 /*
-   Implementation of the UCI interface for Bear chess engine.
-   The UciLoop reads lines from stdin and calls ParseUciCommand to handle
-   each command. Exits on "quit".
-   ParseUciCommand dispatches commands like "uci", "isready", "position",
-   "go", "stop", "ucinewgame", etc.
+    Implementation of the UCI interface for Bear chess engine.
+    The UciLoop reads lines from stdin and calls ParseUciCommand to handle
+    each command. Exits on "quit".
+    ParseUciCommand dispatches commands like "uci", "isready", "position",
+    "go", "stop", "ucinewgame", etc.
 */
 
 #include "uci.h"
 
 #include <stdbool.h>
 #include <stdlib.h>
+#include <string.h>
 
 /*
-   UciLoop:
-   - Continuously reads lines from stdin.
-   - Breaks on "quit" command or EOF.
-   - Calls ParseUciCommand for each line.
+    UciLoop:
+    - Continuously reads lines from stdin.
+    - Breaks on "quit" command or EOF.
+    - Calls ParseUciCommand for each line.
 */
 void UciLoop(Board* board, TransTable* tt)
 {
@@ -48,10 +49,10 @@ void UciLoop(Board* board, TransTable* tt)
 }
 
 /*
-   ParseUciCommand:
-   - Identifies UCI commands from the input line and
-     performs the corresponding actions.
-   - Handles commands: "uci", "isready", "position", "go", "stop", "ucinewgame".
+    ParseUciCommand:
+    - Identifies UCI commands from the input line and
+      performs corresponding actions.
+    - Handles commands: "uci", "isready", "position", "go", "stop", "ucinewgame".
 */
 void ParseUciCommand(const char* line, Board* board, TransTable* tt)
 {
@@ -73,8 +74,7 @@ void ParseUciCommand(const char* line, Board* board, TransTable* tt)
     /* "position" command:
        - Example: "position startpos moves e2e4 e7e5"
        - or: "position fen <FEN> moves ..."
-
-       Parses the position and updates the board accordingly.
+       - Parses the position and updates the board accordingly.
     */
     else if (!strncmp(line, "position", 8)) {
         LogMessage(LOG_DEBUG, "Handling 'position' command: %s\n", line);
@@ -102,6 +102,7 @@ void ParseUciCommand(const char* line, Board* board, TransTable* tt)
                     strcat(fen, token);
                     strcat(fen, " ");
                     token = strtok(NULL, " ");
+                    fenIndex += strlen(token) + 1;
                 }
                 /* Remove the trailing space */
                 if (fenIndex > 0 && fen[fenIndex-1] == ' ') {
@@ -206,13 +207,13 @@ void ParseUciCommand(const char* line, Board* board, TransTable* tt)
 }
 
 /*
-   Helper Functions (You need to implement these based on your engine's design)
+    Helper Functions (Implement these based on your engine's design)
 */
 
 /*
-   UciMoveToMove:
-   - Converts a UCI move string (e.g., "e2e4") to a Move struct.
-   - Handles promotions (e.g., "e7e8q").
+    UciMoveToMove:
+    - Converts a UCI move string (e.g., "e2e4") to a Move struct.
+    - Handles promotions (e.g., "e7e8q").
 */
 Move UciMoveToMove(Board* board, const char* uci)
 {
@@ -259,9 +260,9 @@ Move UciMoveToMove(Board* board, const char* uci)
 }
 
 /*
-   MoveToUciMove:
-   - Converts a Move struct to a UCI move string (e.g., "e2e4").
-   - Handles promotions (e.g., "e7e8q").
+    MoveToUciMove:
+    - Converts a Move struct to a UCI move string (e.g., "e2e4").
+    - Handles promotions (e.g., "e7e8q").
 */
 void MoveToUciMove(Move move, char* uci)
 {

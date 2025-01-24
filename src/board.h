@@ -1,7 +1,18 @@
+/****************************************************************************
+ * File: board.h
+ ****************************************************************************/
+/*
+    Description:
+    - Header for board-related functions and structures.
+    - Manages the board state, piece placements, move execution, and FEN parsing.
+*/
+
 #ifndef BOARD_H
 #define BOARD_H
 
 #include "defs.h"
+#include "move.h" /* Include move.h to use Move structure */
+#include <stdbool.h>
 
 /* Constants for castling rights */
 #define WKCA (1 << 0) /* White Kingside Castling Allowed */
@@ -23,8 +34,5 @@ void InitBoard(Board* b);
 void SetFen(Board* b, const char* fen, bool debugMode);
 bool IsMoveLegal(Board* b, Move move); /* Implement legality check */
 void MakeMove(Board* b, Move move);    /* Implement making a move */
-int FRTo120(int file, int rank);       /* File-Rank to 120-based index */
-Move UciMoveToMove(Board* board, const char* uci); /* Already in uci.c */
-void MoveToUciMove(Move move, char* uci);          /* Already in uci.c */
 
 #endif /* BOARD_H */
