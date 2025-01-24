@@ -2,17 +2,14 @@
  * File: main.c
  ****************************************************************************/
 /*
-   This is the main entry point for the chess engine "Bear 0.01". It uses
-   the UCI protocol for communication with GUIs. 
+   Main entry point for the Bear chess engine.
+   Handles initialization, command-line arguments, and enters the UCI loop.
 */
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-/* 
-   Includes for engine modules, as needed.
-*/
 #include "defs.h"
 #include "board.h"
 #include "movegen.h"
@@ -20,24 +17,17 @@
 #include "evaluate.h"
 #include "transposition.h"
 #include "uci.h"
+#include "log.h" /* Include logging header */
 
-/*
-   main:
-   - Prints version info.
-   - Processes command-line arguments (optional).
-   - Initializes board, transposition table, etc.
-   - Enters the UCI loop for engine communication.
-   - Cleans up and exits.
-*/
 int main(int argc, char* argv[])
 {
     printf("Engine name: Bear 0.01\n");
     printf("Author: ChatGPT o1\n\n");
 
-    int debugMode = 0;
+    int debugMode = 0; // Initialize debugMode
     size_t ttSize = 1024 * 1024; /* Example: in MB or raw entries */
 
-    /* Process command-line arguments (optional). */
+    /* Process command-line arguments */
     for(int i = 1; i < argc; ++i) {
         if(!strcmp(argv[i], "--debug")) {
             debugMode = 1;
@@ -49,20 +39,30 @@ int main(int argc, char* argv[])
         }
     }
 
+    /* Initialize logging */
+    InitLogging(debugMode);
+
     /* Initialize engine components */
     Board board;
     InitBoard(&board);
+    LogDebug("Board initialized.\n");
 
     TransTable tt;
     InitTranspositionTable(&tt, ttSize);
+    LogDebug("Transposition Table initialized with %zu entries.\n", ttSize);
 
-    /* Optionally do more initialization here (e.g., hashing seeds). */
+    /* Optionally set up the board with a FEN or start position */
+    // SetFen(&board, "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1", debugMode);
 
     /* Enter UCI loop */
+    LogDebug("Entering UCI loop...\n");
     UciLoop();
+    LogDebug("Exited UCI loop.\n");
 
     /* Clean up before exit */
     FreeTranspositionTable(&tt);
+    LogDebug("Transposition Table freed.\n");
 
+    printf("Engine exiting.\n");
     return 0;
 }

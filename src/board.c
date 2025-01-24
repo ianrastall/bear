@@ -3,15 +3,13 @@
  ****************************************************************************/
 /*
    Description:
-   - Implements the board-related functions declared in board.h.
-   - Uses mailbox 120 representation and FEN parsing, etc.
+   - Implementation of board-related functions.
 */
 
 #include "board.h"
+#include <ctype.h>  /* For isdigit() */
+#include <string.h> /* For strtok(), strncpy(), etc. */
 
-/* -------------------------------------------------------------------------
-   Helper: Convert 0-based file & rank to 120-based index (FR2SQ is in defs.h)
-   ------------------------------------------------------------------------- */
 static int FRTo120(int file, int rank) {
     return (rank + 2) * 10 + (file + 1);
 }
