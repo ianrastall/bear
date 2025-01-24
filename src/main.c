@@ -25,7 +25,7 @@ int main(int argc, char* argv[])
     printf("Author: ChatGPT o1\n\n");
 
     int debugMode = 0; // Initialize debugMode
-    size_t ttSize = 1024 * 1024; /* Example: in MB or raw entries */
+    size_t ttSize = 1024 * 1024; /* Example: number of TT entries */
 
     /* Process command-line arguments */
     for(int i = 1; i < argc; ++i) {
@@ -34,34 +34,35 @@ int main(int argc, char* argv[])
             printf("Debug mode: ON\n");
         }
         else if(!strcmp(argv[i], "--tt-size") && i + 1 < argc) {
-            ttSize = (size_t)atoi(argv[++i]) * 1024 * 1024;
+            ttSize = (size_t)atoi(argv[++i]);
             printf("Requested TT size: %zu entries\n", ttSize);
         }
     }
 
     /* Initialize logging */
     InitLogging(debugMode);
+    SetLogLevel(LOG_DEBUG); /* Set desired log level */
 
     /* Initialize engine components */
     Board board;
     InitBoard(&board);
-    LogDebug("Board initialized.\n");
+    LogMessage(LOG_DEBUG, "Board initialized.\n");
 
     TransTable tt;
     InitTranspositionTable(&tt, ttSize);
-    LogDebug("Transposition Table initialized with %zu entries.\n", ttSize);
+    LogMessage(LOG_DEBUG, "Transposition Table initialized with %zu entries.\n", ttSize);
 
     /* Optionally set up the board with a FEN or start position */
     // SetFen(&board, "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1", debugMode);
 
     /* Enter UCI loop */
-    LogDebug("Entering UCI loop...\n");
-    UciLoop();
-    LogDebug("Exited UCI loop.\n");
+    LogMessage(LOG_DEBUG, "Entering UCI loop...\n");
+    UciLoop(&board, &tt);
+    LogMessage(LOG_DEBUG, "Exited UCI loop.\n");
 
     /* Clean up before exit */
     FreeTranspositionTable(&tt);
-    LogDebug("Transposition Table freed.\n");
+    LogMessage(LOG_DEBUG, "Transposition Table freed.\n");
 
     printf("Engine exiting.\n");
     return 0;

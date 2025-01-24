@@ -1,55 +1,47 @@
 /****************************************************************************
  * File: defs.h
  ****************************************************************************/
+/*
+   Global definitions and constants for the Bear chess engine.
+*/
 
 #ifndef DEFS_H
 #define DEFS_H
 
-#include <stdio.h>
-#include <stdlib.h>
 #include <stdbool.h>
-#include <string.h>
 
-/* Board dimensions and mailbox approach */
+/* Board size in mailbox representation (10x12) */
 #define BOARD_SIZE 120
 
-/* Maximum search depth, moves, etc. */
-#define MAX_DEPTH 64
-#define MAX_MOVES 256
+/* Piece codes */
+#define EMPTY 0
 
-/* Sides */
+#define W_PAWN   1
+#define W_KNIGHT 2
+#define W_BISHOP 3
+#define W_ROOK   4
+#define W_QUEEN  5
+#define W_KING   6
+
+#define B_PAWN   7
+#define B_KNIGHT 8
+#define B_BISHOP 9
+#define B_ROOK   10
+#define B_QUEEN  11
+#define B_KING   12
+
+/* Side to move */
 #define WHITE 0
 #define BLACK 1
-#define BOTH  2
 
-/* Enumerations for piece IDs (0..12) */
-enum {
-    EMPTY,
-    W_PAWN, W_KNIGHT, W_BISHOP, W_ROOK, W_QUEEN, W_KING,
-    B_PAWN, B_KNIGHT, B_BISHOP, B_ROOK, B_QUEEN, B_KING
-};
+/* Castling flags */
+#define WKCA (1 << 0) /* White Kingside Castling Allowed */
+#define WQCA (1 << 1) /* White Queenside Castling Allowed */
+#define BKCA (1 << 2) /* Black Kingside Castling Allowed */
+#define BQCA (1 << 3) /* Black Queenside Castling Allowed */
 
-/* Castling rights bit flags (if you want them globally) */
-#define WKCA 1  /* White can castle kingside */
-#define WQCA 2  /* White can castle queenside */
-#define BKCA 4  /* Black can castle kingside */
-#define BQCA 8  /* Black can castle queenside */
-
-/* Piece values */
-#define VAL_PAWN   100
-#define VAL_KNIGHT 320
-#define VAL_BISHOP 330
-#define VAL_ROOK   500
-#define VAL_QUEEN  900
-#define VAL_KING   20000
-
-/*
-   Example macros for converting (file, rank) <-> 120-based index 
-   if needed by other files. You might already have these.
-*/
-#define FR2SQ(f, r)   (((r) + 2) * 10 + ((f) + 1))
-/* #define SQ2RANK(sq) ((sq)/10 - 2)
-   #define SQ2FILE(sq) ((sq)%10 - 1)
-*/
+/* Evaluation constants */
+#define INFINITY 1000000
+#define MATE 999900
 
 #endif /* DEFS_H */
