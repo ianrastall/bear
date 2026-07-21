@@ -14,17 +14,36 @@ namespace Bear.App;
 /// either fail the write or silently redirect it into a VirtualStore path nobody ever finds.
 /// <c>Documents\Bear\</c> is writable, discoverable, and backed up.
 ///
-/// Rotated monthly so the set stays predictable and no single file grows without bound.
+/// Rotation is the player's, not the clock's. Games append to whichever log is already in
+/// the folder; take one away — file it, archive it, move it somewhere — and the next game
+/// starts a fresh one stamped with that day. So a file is named for when it *began*, and
+/// the set is trivially distinguishable without anyone naming anything.
 /// </summary>
 internal static class GameLog
 {
+    private const string Pattern = "bear-*.pgn";
+
     public static string Folder => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments),
         "Bear");
 
-    /// <summary>The file the current month's games go to, e.g. <c>bear-2026-07.pgn</c>.</summary>
-    public static string CurrentFile =>
-        Path.Combine(Folder, $"bear-{DateTime.Now:yyyy-MM}.pgn");
+    /// <summary>
+    /// The log in progress, or the name a new one would take. <c>bear-2026-07-21.pgn</c>
+    /// sorts chronologically as plain text, so "the newest" is just the last name.
+    /// </summary>
+    public static string CurrentFile
+    {
+        get
+        {
+            var existing = Directory.Exists(Folder)
+                ? Directory.EnumerateFiles(Folder, Pattern)
+                    .OrderBy(Path.GetFileName, StringComparer.Ordinal)
+                    .LastOrDefault()
+                : null;
+
+            return existing ?? Path.Combine(Folder, $"bear-{DateTime.Now:yyyy-MM-dd}.pgn");
+        }
+    }
 
     /// <summary>
     /// Append one game. Games are separated by a blank line, as the PGN spec asks and as

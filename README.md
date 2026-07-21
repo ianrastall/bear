@@ -119,9 +119,12 @@ a reason that outlives the itch.
   second — search is off, so a delay would be pure theatre. Bear moves when it has the move.
 - **User profiles.** Two people sharing one machine is likely, but not painful enough to
   justify accounts.
-- **A game *database*.** Every game is appended to a plain PGN in `Documents\Bear\`,
-  rotated monthly (`bear-2026-07.pgn`), and that is the whole mechanism: no schema, no
-  index, no queries, nothing ever read back. The objection to a database was never storage —
+- **A game *database*.** Every game is appended to a plain PGN in `Documents\Bear\`, and
+  that is the whole mechanism: no schema, no index, no queries, nothing ever read back.
+  Rotation belongs to the player rather than the calendar — games append to whichever log is
+  in the folder, and taking one away starts a fresh `bear-YYYY-MM-DD.pgn` stamped with that
+  day. Each file is therefore named for when it *began*, so a shelf of them is
+  self-describing without anyone naming anything. The objection to a database was never storage —
   it was that a stored history implies an owner, which drags user profiles back in. That
   only bit while a *rating* was being derived from the history. With rating out of scope, a
   stored history is just a record, and one the player can open, edit or delete like any
