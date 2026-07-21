@@ -328,13 +328,21 @@ hex, so a `ColorPicker` constrained to the `Ok` band offers infinitely many boar
 nothing enumerated. The 111 are the scannable set; the picker is for fiddlers. Persist either
 the palette *name* or the custom hex, whichever produced the current board.
 
-**M3 — Export both models.** `torch.onnx.export` over `from_pretrained("blitz")` *and*
-`from_pretrained("rapid")`, once, offline. Call `model.eval()` first or dropout stays live in
-the graph. Three inputs: `boards`, `elos_self`, `elos_oppo` — the Elo inputs are *bucket
-indices* from `create_elo_dict()`, not raw ratings. Size is accepted rather than fought:
-fp32 is fine, and quantisation is only worth revisiting if CPU latency disappoints, since
-speed is what players notice. Deliverable: a script under `tools/` plus two gitignored
-`.onnx` files that load cleanly in ONNX Runtime. No app code.
+**M3 — Export both models. ✅ Done.** `tools/export_onnx.py` produces
+`maia2-blitz.onnx` and `maia2-rapid.onnx`, **89.0 MB each, 178 MB for the pair**, single-file
+with initialisers inlined. Verified against the PyTorch original at max |diff| 8.8e-05, and
+**4–6 ms per move on CPU** — comfortably invisible at one move per turn, which was the real
+question. Quantisation is therefore unnecessary; fp32 ships.
+
+Confirmed while exporting: the policy space is **1880** moves in `get_all_possible_moves()`
+order (not lc0's 1858), the value head is a scalar, and there is a third `side_info` output
+of 2021 that Bear ignores. Graph is opset 18, inputs `boards[b,18,8,8]`,
+`elo_self[b]`, `elo_oppo[b]` as int64 bucket indices.
+
+Three traps, all recorded in the script's header: `maia2`'s `python <3.13` / `torch <2.9`
+pins are conservative and importing from a clone avoids a torch downgrade; `model.eval()`
+must be called or dropout is baked into the graph; and torch writes weights to a sidecar
+`.onnx.data` unless the model is re-saved.
 
 **M4 — Encoder and decoder, verified against the Python original.** Board → 18 channels
 (twelve piece planes, side to move, four castling rights, one en passant — no history), and
