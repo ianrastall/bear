@@ -344,12 +344,28 @@ pins are conservative and importing from a clone avoids a torch downgrade; `mode
 must be called or dropout is baked into the graph; and torch writes weights to a sidecar
 `.onnx.data` unless the model is re-saved.
 
-**M4 — Encoder and decoder, verified against the Python original.** Board → 18 channels
-(twelve piece planes, side to move, four castling rights, one en passant — no history), and
-policy logits → a legal move using the `get_all_possible_moves()` index order. Build it as a
-console harness and prove it by running `maia2`'s own `inference` over a fixed FEN suite,
-requiring identical move choices. Much smaller than the equivalent job on Maia 1's 112-plane
-history-carrying input, but still the milestone that de-risks everything after it.
+**M4 — Encoder and decoder, verified against the Python original. ✅ Done.**
+`Maia/MaiaEncoder.cs` and `Maia/MaiaPolicy.cs`, checked by `tools/Bear.Maia.Verify` against
+golden vectors dumped from maia2 itself: **3382/3382 exact.** The board tensor is entirely
+0/1, so the comparison is on the *set* of one-valued cells rather than a tolerance — a
+transposed rank or a mishandled mirror cannot slip through.
+
+**The mirror is the thing that matters.** `preprocessing` does
+`chess.Board(fen).mirror()` whenever Black is to move, so the network only ever sees a
+White-to-move position: ranks flipped, colours swapped, castling rights exchanged, en
+passant square moved. Every move it returns is in that mirrored frame and must be flipped
+back. Get this wrong and White plays beautifully while Black plays gibberish.
+
+The encoder works from a **FEN**, not from the rules library's object model — the Python
+takes a FEN too, so the two are directly comparable, and nothing here depends on how Bear
+represents a board.
+
+The 1880-move policy order is **generated, not reimplemented**: it comes from python-chess's
+own move generation for a lone queen and knight on each square, which C# has no business
+reproducing. `tools/make_golden.py` writes `Assets/maia2-moves.txt` and it ships embedded.
+
+Masking to legal moves is not a nicety — the policy head scores all 1880 entries and its
+unmasked top pick is routinely illegal in a given position.
 
 **M5 — Maia plays.** Wire M4 to the board: bucket from the strength selector, model from the
 time control, move on the opponent's turn, no delay, no reporting. Pass the selector's bucket

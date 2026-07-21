@@ -58,3 +58,7 @@ __pycache__/
 Thumbs.db
 desktop.ini
 .DS_Store
+
+## Verification harness build output
+tools/Bear.Maia.Verify/bin/
+tools/Bear.Maia.Verify/obj/
