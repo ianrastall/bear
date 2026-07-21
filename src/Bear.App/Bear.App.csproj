@@ -81,8 +81,5 @@
     <PackageReference Include="Microsoft.WindowsAppSDK" Version="2.3.1" />
   </ItemGroup>
 
-  <ItemGroup>
-    <ProjectReference Include="..\Bear.Engine\Bear.Engine.csproj" />
-  </ItemGroup>
 
 </Project>

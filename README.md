@@ -1,6 +1,7 @@
 # Bear
 
-A native chess GUI for Windows: play a human-like opponent, analyse, keep games, export PGN.
+A native chess GUI for Windows: play a human-like opponent, export the game as PGN.
+Deliberately nothing else — see *Not in scope*.
 
 C# 14 · .NET 10 · WinUI 3 (Windows App SDK 2.3.1) · **win-x64 only** · ships as a single `.exe`.
 
@@ -36,15 +37,16 @@ Dark mode is set once, at the application level: `RequestedTheme="Dark"` in `App
 ## Layout
 
 ```text
-src/Bear.Engine/           UCI engine wrapper — no chess rules, no UI, no dependencies
 src/Bear.App/
-  Controls/                the board: rendering, drag-and-drop, right-click menu
-  Theming/                 luminance-linked palettes, embedded Merida SVGs
+  Controls/                the board: rendering, drag-and-drop, right-click menu, pickers
+  Theming/                 the palette grid, its colour maths, embedded piece SVGs
+  Settings.cs              the one persisted key
+tools/                     offline generators: palettes now, ONNX export at M3
 ```
 
-`Bear.Engine` deliberately knows nothing about chess. It speaks UCI to a subprocess
-and nothing more, so lc0 (running Maia weights), Stockfish, or any other UCI engine
-drives through the same `IChessEngine` interface.
+One project. There is no engine subprocess to wrap — Maia is evaluated in-process
+(see *The opponent*), and the UCI wrapper that used to live in `src/Bear.Engine/` was
+removed at M0 once it became clear nothing would ever call it.
 
 ## Design notes
 
@@ -62,9 +64,10 @@ The derivation is a faithful port of the Board Colors tool at
 (border ×0.92, light ×0.78). That desaturation is the part that keeps light squares from
 going lurid, and it is why this is done in HSL rather than in linear light.
 
-Relative luminance is a **diagnostic, not the mechanism**: it only classifies the dark
-square as Too Dark (<0.11) / OK / Too Light (>0.42), as the tool reports it. All twenty
-presets sit inside the OK band — seven candidates were lightened because they failed it.
+Relative luminance is a **diagnostic** in the tool, which classifies the dark square as
+Too Dark (<0.11) / OK / Too Light (>0.42). Bear goes further and makes it the *mechanism*
+for the shade axis: palettes are solved to land on a target luminance rather than a target
+HSL lightness, which is what lets "Dark" mean the same darkness across every hue. See M2a.
 
 The C# port was verified to emit hex values identical to the JavaScript original.
 Keep `Theming/ColorMath.cs` in step with the tool rather than "improving" it separately.
@@ -128,7 +131,7 @@ a reason that outlives the itch.
 
 Exactly one thing persists between sessions: the board palette. That is not a leftover of
 the rating question and does not fall with it — it is there because hunting down your
-preferred board through a menu of sixty on every launch is precisely the annoyance
+preferred board among a hundred-odd on every launch is precisely the annoyance
 persistence exists to remove. The more palettes ship, the more it earns its keep.
 
 ## The opponent
@@ -254,30 +257,34 @@ Network weights are **not committed** (see `.gitignore`) — large, and separate
 - [x] Interactive board — drag-and-drop **and** click-to-move, legal-move markers
       (dot for quiet moves, disc for captures), last-move and check highlighting
 - [x] Merida SVG pieces, embedded
-- [x] Twenty luminance-linked board palettes, right-click menu, board flip, PGN to clipboard
+- [x] 111 palettes on a hue × chroma × shade grid, with a swatch picker and persistence
+- [x] Promotion picker; right-click menu, board flip, PGN to clipboard
 - [x] Clocks with increment and six time controls; opponent strength selector
-- [x] `Bear.Engine` — UCI wrapper (see M0: it may no longer have a consumer)
 
 ## Roadmap
 
 Ordered. Each milestone is independently finishable and leaves the app working.
 
-**M0 — Decide `Bear.Engine`'s fate.** With Maia in-process and analysis out of scope, the
-UCI wrapper has no caller. Keep it as a dormant seam for a future conventional engine, or
-delete it and recover the option from git history. Cheap either way; decide before M5 so the
-wiring doesn't get built around a stub.
+**M0 — `Bear.Engine`. ✅ Removed.** The UCI wrapper had no caller: Maia runs in-process as
+ONNX, and analysis is out of scope, so nothing was ever going to speak UCI to a subprocess.
+It was also never verified against a real engine — only a mock — so it was not a working
+option being preserved, just unverified code that nothing exercised. Recoverable from the
+initial commit if a conventional engine is ever wanted.
 
-**M1 — Promotion picker.** The last rules gap; the board currently auto-queens. Small,
-self-contained, and independent of everything below.
+**M1 — Promotion picker. ✅ Done.** The last rules gap; the board used to auto-queen. Four
+pieces over the promotion square in the mover's colour, ordered Q/R/B/N by usefulness rather
+than by move-generator order. Dismissing without choosing abandons the move and the pawn
+snaps back — silently queening a cancelled promotion would be the one irreversible surprise
+on the board.
 
-**M2 — Palette persistence.** The one thing that survives restart. Hand-rolled JSON at
+**M2 — Palette persistence. ✅ Done.** The one thing that survives restart. Hand-rolled JSON at
 `%LOCALAPPDATA%\Bear\settings.json`, written on change and read at startup — no settings
 framework, and note `ApplicationData.Current` is unavailable to unpackaged apps. Store the
 palette *name*, not its colours, so `BoardTheme.All` stays the single source of truth and an
 unknown name falls back to `BoardTheme.Default`. Palette only: no rating, no player name, no
 window geometry. One key is not an architecture, and it stays that way.
 
-**M2a — 111 palettes on a colour-space grid, plus a custom picker.** Twenty is thin, but the
+**M2a — 111 palettes on a colour-space grid. ✅ Done; the custom picker is still to come.** Twenty was thin, but the
 count was never the hard part. Any large set has to be *navigable*, and evocative names are
 not navigation: nobody recalls the difference between Cadet, Powder and Dodger blue, so a
 list of 137 poetic labels is a list you read rather than a set you choose from.

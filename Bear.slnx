@@ -1,6 +1,5 @@
 <Solution>
   <Folder Name="/src/">
     <Project Path="src/Bear.App/Bear.App.csproj" />
-    <Project Path="src/Bear.Engine/Bear.Engine.csproj" />
   </Folder>
 </Solution>
