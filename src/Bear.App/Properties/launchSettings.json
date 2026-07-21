@@ -1,0 +1,10 @@
+{
+  "profiles": {
+    "Bear.App (Package)": {
+      "commandName": "MsixPackage"
+    },
+    "Bear.App (Unpackaged)": {
+      "commandName": "Project"
+    }
+  }
+}

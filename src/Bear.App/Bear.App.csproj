@@ -1,0 +1,88 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows10.0.26100.0</TargetFramework>
+    <TargetPlatformMinVersion>10.0.17763.0</TargetPlatformMinVersion>
+    <RootNamespace>Bear.App</RootNamespace>
+    <AssemblyName>Bear</AssemblyName>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon>Assets\AppIcon.ico</ApplicationIcon>
+    <UseWinUI>true</UseWinUI>
+    <WinUISDKReferences>false</WinUISDKReferences>
+
+    <!--
+      Unpackaged (no MSIX, no app identity): the deliverable is a bare .exe the
+      user double-clicks. This is what makes single-file publishing possible at all.
+    -->
+    <WindowsPackageType>None</WindowsPackageType>
+    <!--
+      Counter-intuitive but required: WindowsAppSDK's SingleFile.targets refuses to
+      run without this, because it needs the MSIX tooling to generate the resources.pri
+      that gets embedded in the exe. It does NOT make the output a packaged app —
+      WindowsPackageType=None above is what decides that.
+    -->
+    <EnableMsixTooling>true</EnableMsixTooling>
+
+    <!--
+      Self-contained twice over: the .NET runtime AND the Windows App SDK travel
+      inside the exe, so the target machine needs neither installed.
+    -->
+    <SelfContained>true</SelfContained>
+    <WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>
+  </PropertyGroup>
+
+  <!-- Publish properties: one file, everything inside it. -->
+  <PropertyGroup>
+    <PublishSingleFile>true</PublishSingleFile>
+    <!-- WinUI ships native DLLs; without this they land beside the exe instead of in it. -->
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <IncludeAllContentForSelfExtract>true</IncludeAllContentForSelfExtract>
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+
+    <!--
+      Trimming is OFF on purpose. WinUI resolves types from XAML by name at runtime,
+      which the trimmer cannot see; trimmed builds compile fine and then fail when a
+      page loads. Revisit only with a full click-through of every screen.
+    -->
+    <PublishTrimmed>false</PublishTrimmed>
+    <PublishReadyToRun Condition="'$(Configuration)' != 'Debug'">true</PublishReadyToRun>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Content Include="Assets\SplashScreen.scale-200.png" />
+    <Content Include="Assets\LockScreenLogo.scale-200.png" />
+    <Content Include="Assets\Square150x150Logo.scale-200.png" />
+    <Content Include="Assets\Square44x44Logo.scale-200.png" />
+    <Content Include="Assets\Square44x44Logo.targetsize-24_altform-unplated.png" />
+    <Content Include="Assets\Square44x44Logo.targetsize-48_altform-lightunplated.png" />
+    <Content Include="Assets\StoreLogo.png" />
+    <Content Include="Assets\AppIcon.ico" />
+    <Content Include="Assets\Wide310x150Logo.scale-200.png" />
+  </ItemGroup>
+
+  <!--
+    Merida piece SVGs are embedded, not Content: the app publishes as a self-extracting
+    single exe where ms-appx:/// asset resolution is unreliable. See PieceImages.cs.
+    Source: lichess-org/lila, GPLv2+ — see LICENSE-ASSETS.md.
+  -->
+  <ItemGroup>
+    <EmbeddedResource Include="Assets\Pieces\merida\*.svg" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Manifest Include="$(ApplicationManifest)" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Gera.Chess" Version="1.2.0" />
+    <PackageReference Include="Microsoft.Windows.SDK.BuildTools" Version="10.0.28000.2270" />
+    <PackageReference Include="Microsoft.Windows.SDK.BuildTools.WinApp" Version="0.5.0" />
+    <PackageReference Include="Microsoft.WindowsAppSDK" Version="2.3.1" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Bear.Engine\Bear.Engine.csproj" />
+  </ItemGroup>
+
+</Project>

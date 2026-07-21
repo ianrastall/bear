@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<UserControl
+    x:Class="Bear.App.Controls.ChessBoardView"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    mc:Ignorable="d">
+
+    <!--
+        Root is Transparent rather than null so it receives pointer input across its
+        whole area; a null background is not hit-testable in WinUI.
+    -->
+    <Grid
+        x:Name="Root"
+        Background="Transparent"
+        SizeChanged="OnRootSizeChanged">
+
+        <!--  BoardFrame's background is the border colour; the coordinates sit on it.  -->
+        <Grid
+            x:Name="BoardFrame"
+            HorizontalAlignment="Center"
+            VerticalAlignment="Center"
+            CornerRadius="3">
+
+            <!--  Squares, then resting pieces, then the piece being dragged.  -->
+            <Grid
+                x:Name="Layers"
+                HorizontalAlignment="Center"
+                VerticalAlignment="Center">
+                <Grid x:Name="SquaresGrid" />
+                <Canvas x:Name="PieceCanvas" />
+                <Canvas x:Name="DragCanvas" IsHitTestVisible="False" />
+            </Grid>
+
+            <Canvas x:Name="CoordCanvas" IsHitTestVisible="False" />
+        </Grid>
+    </Grid>
+</UserControl>
