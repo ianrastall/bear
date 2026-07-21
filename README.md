@@ -335,7 +335,7 @@ as **both** `elos_self` and `elos_oppo` — see *The opponent*. **Randomise colo
 start of each game, and flip the board to suit so the player always faces up the board.
 First game against a real human-like opponent.
 
-**M6 — File commands and PGN export.** Group the file operations together at the top of the
+**M6 — File commands and PGN export. ✅ Done, pending M5 for colour.** Group the file operations together at the top of the
 right-click menu: New game, Copy PGN (exists), and Save PGN as… Add the Seven Tag Roster
 plus the two tags that actually matter here:
 

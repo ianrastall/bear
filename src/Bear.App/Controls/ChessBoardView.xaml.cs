@@ -685,18 +685,8 @@ public sealed partial class ChessBoardView : UserControl
         themes.Click += (_, _) => ShowPalettePicker();
         Menu.Items.Add(themes);
 
-        Menu.Items.Add(new MenuFlyoutSeparator());
-
-        var copyPgn = new MenuFlyoutItem { Text = "Copy PGN" };
-        copyPgn.Click += (_, _) => CopyPgn();
-        Menu.Items.Add(copyPgn);
-    }
-
-    private void CopyPgn()
-    {
-        var package = new DataPackage { RequestedOperation = DataPackageOperation.Copy };
-        package.SetText(Board.ToPgn());
-        Clipboard.SetContent(package);
+        // PGN lives on the hosting page: the tags need the clock and the opponent's
+        // rating, and the board deliberately knows about neither.
     }
 
     // --- palette picker ---------------------------------------------------

@@ -21,8 +21,13 @@ namespace Bear.App;
 /// </summary>
 public partial class App : Application
 {
-    private Window? _window;
-    
+    /// <summary>
+    /// The one window. Exposed because unpackaged WinUI pickers and dialogs need an HWND,
+    /// which can only be obtained from a <see cref="Window"/>.
+    /// </summary>
+    public static Window? Window { get; private set; }
+
+
     /// <summary>
     /// Initializes the singleton application object.  This is the first line of authored code
     /// executed, and as such is the logical equivalent of main() or WinMain().
@@ -38,7 +43,7 @@ public partial class App : Application
     /// <param name="args">Details about the launch request and process.</param>
     protected override void OnLaunched(Microsoft.UI.Xaml.LaunchActivatedEventArgs args)
     {
-        _window = new MainWindow();
-        _window.Activate();
+        Window = new MainWindow();
+        Window.Activate();
     }
 }

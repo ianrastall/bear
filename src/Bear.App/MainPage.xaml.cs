@@ -2,6 +2,9 @@ using Bear.App.Theming;
 using Chess;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Windows.ApplicationModel.DataTransfer;
+using Windows.Storage;
+using Windows.Storage.Pickers;
 
 namespace Bear.App;
 
@@ -77,6 +80,24 @@ public sealed partial class MainPage : Page
     private void AddAppMenuItems()
     {
         var menu = BoardView.Menu;
+
+        // File commands sit with New game at the top, not adrift at the bottom.
+        // Index 1 is immediately after it.
+        var copyPgn = new MenuFlyoutItem { Text = "Copy PGN" };
+        copyPgn.Click += (_, _) =>
+        {
+            var package = new DataPackage { RequestedOperation = DataPackageOperation.Copy };
+            package.SetText(BuildPgn());
+            Clipboard.SetContent(package);
+        };
+        menu.Items.Insert(1, copyPgn);
+
+        var savePgn = new MenuFlyoutItem { Text = "Save PGN as…" };
+        savePgn.Click += async (_, _) => await SavePgnAsync();
+        menu.Items.Insert(2, savePgn);
+
+        menu.Items.Insert(3, new MenuFlyoutSeparator());
+
         menu.Items.Add(new MenuFlyoutSeparator());
 
         var strength = new MenuFlyoutSubItem { Text = "Opponent strength" };
@@ -139,6 +160,95 @@ public sealed partial class MainPage : Page
         ("Blitz", [("3 + 0", 3, 0), ("3 + 2", 3, 2), ("5 + 0", 5, 0), ("5 + 3", 5, 3)]),
         ("Rapid", [("10 + 0", 10, 0), ("10 + 5", 10, 5), ("15 + 10", 15, 10), ("20 + 0", 20, 0)]),
     ];
+
+    // --- PGN -------------------------------------------------------------
+
+    /// <summary>
+    /// The game with a full tag pair section.
+    ///
+    /// <see cref="ChessBoard.ToPgn"/> emits its own header block, so its output is
+    /// stripped to movetext and re-tagged here — the tags that matter (the clock, the
+    /// opponent's rating) are the ones only this page knows.
+    /// </summary>
+    private string BuildPgn()
+    {
+        var board = BoardView.Board;
+
+        var movetext = string.Join(
+            Environment.NewLine,
+            board.ToPgn()
+                .Split('\n')
+                .Select(l => l.TrimEnd('\r'))
+                .SkipWhile(l => l.TrimStart().StartsWith('[') || l.Length == 0))
+            .Trim();
+
+        // TODO(M5): colour is randomised per game, so this pairing becomes dynamic.
+        var opponent = $"Maia {_opponentStrength}";
+
+        var tags = new (string Key, string Value)[]
+        {
+            ("Event", "Casual game"),
+            ("Site", "Bear"),
+            ("Date", DateTime.Now.ToString("yyyy.MM.dd")),
+            ("Round", "-"),
+            ("White", "Player"),
+            ("Black", opponent),
+            ("Result", ResultTag()),
+            // Seconds-plus-increment, per the PGN spec. This is the tag that makes an
+            // exported game reconstructible: it fixes the category, and with it which
+            // Maia model played.
+            ("TimeControl", $"{(int)_baseTime.TotalSeconds}+{(int)_increment.TotalSeconds}"),
+            // Only Maia's side carries a rating. Bear does not track the player's, and
+            // omitting it is more honest than inventing one.
+            ("BlackElo", _opponentStrength.ToString()),
+        };
+
+        var header = string.Join(
+            Environment.NewLine,
+            tags.Select(t => $"[{t.Key} \"{t.Value}\"]"));
+
+        return header + Environment.NewLine + Environment.NewLine + movetext;
+    }
+
+    private string ResultTag()
+    {
+        if (_whiteRemaining <= TimeSpan.Zero)
+            return "0-1";
+        if (_blackRemaining <= TimeSpan.Zero)
+            return "1-0";
+
+        var board = BoardView.Board;
+        if (!board.IsEndGame)
+            return "*";
+
+        return board.EndGame?.WonSide switch
+        {
+            PieceColor { } side when side == PieceColor.White => "1-0",
+            PieceColor { } side when side == PieceColor.Black => "0-1",
+            _ => "1/2-1/2",
+        };
+    }
+
+    private async Task SavePgnAsync()
+    {
+        var picker = new FileSavePicker
+        {
+            SuggestedStartLocation = PickerLocationId.DocumentsLibrary,
+            SuggestedFileName = $"bear-{DateTime.Now:yyyyMMdd-HHmm}",
+        };
+        picker.FileTypeChoices.Add("Portable Game Notation", [".pgn"]);
+
+        // Unpackaged WinUI: a picker has no window to parent itself to unless one is
+        // supplied, and it throws rather than guessing.
+        if (App.Window is { } window)
+        {
+            WinRT.Interop.InitializeWithWindow.Initialize(
+                picker, WinRT.Interop.WindowNative.GetWindowHandle(window));
+        }
+
+        if (await picker.PickSaveFileAsync() is { } file)
+            await FileIO.WriteTextAsync(file, BuildPgn());
+    }
 
     // --- clocks ----------------------------------------------------------
 
