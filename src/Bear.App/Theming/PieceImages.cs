@@ -11,7 +11,7 @@ namespace Bear.App.Theming;
 /// </summary>
 internal static class PieceImages
 {
-    private const string ResourcePrefix = "Bear.App.Assets.Pieces.merida.";
+    private const string ResourcePrefix = "Bear.App.Assets.Pieces.cburnett.";
 
     /// <summary>Rasterisation target. Generous so pieces stay crisp on a large board.</summary>
     private const int RasterPx = 320;

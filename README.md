@@ -81,8 +81,10 @@ dark digits; the inactive side dims. An earlier attempt borrowed the Lc0 logo's 
 segment-font look, but without an actual segment font it just read as a pink clock rather
 than an homage, so it was dropped.
 
-**Pieces.** Merida SVGs from Lichess, embedded as resources (GPLv2+ — see
-`LICENSE-ASSETS.md`).
+**Pieces.** CBurnett SVGs, embedded as resources. The artwork is multi-licensed and Bear
+elects its **BSD-3-Clause** option, which is what lets the build be honestly MIT. Merida was
+the aesthetic preference and shipped first, but it is GPLv2+ and the licence decided it —
+see `LICENSE-ASSETS.md`.
 
 ## Licence
 
@@ -356,10 +358,14 @@ behaving correctly across a fresh game.
 These two are independent of M1–M7 and can be done at any time, but both must land before
 any public release — until they do, the shipped exe is not honestly MIT.
 
-**M8 — Swap Merida for CBurnett (BSD-3).** The last copyleft asset in the build. Elect the
-BSD-3-Clause option, credit Colin M. L. Burnett in `LICENSE-ASSETS.md`, and check legibility
-at small board sizes before committing. Look at both sets side by side first — this is a
-licence decision with an aesthetic cost, and Merida is the stated preference.
+**M8 — Swap Merida for CBurnett (BSD-3). ✅ Done.** The last copyleft asset is out of the
+build; the shipped exe now carries none. Twelve SVGs taken from Wikimedia Commons rather
+than from Lichess, because Commons carries Cburnett's original multi-licence offer while
+Lichess distributes the same artwork under its own GPL 2+ election. Attribution and the
+elected BSD-3 text are in `LICENSE-ASSETS.md`.
+
+Merida was the aesthetic preference and lost on licence alone. **Still worth eyeballing**:
+CBurnett at small board sizes, since that judgement was never made side by side.
 
 **M9 — Maia 2 weights licence. ✅ Done.** MIT, `Copyright (c) 2024 CSSLab`, asserted in
 `LICENSE`, `pyproject.toml` and the README, with no separate terms attached to the

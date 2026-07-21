@@ -12,41 +12,78 @@ describes the artifact users actually download.
 
 | Asset | Licence | Embedded today? |
 | --- | --- | --- |
-| Merida pieces | GPLv2 or later | **Yes** |
+| CBurnett pieces | BSD-3-Clause (elected) | **Yes** |
 | Maia 2 weights | MIT | Not yet (roadmap M3) |
 
-A build made today is therefore **not cleanly MIT**: the Merida pieces carry copyleft.
-Closing that gap is roadmap M8, and it is now the *only* thing standing between Bear and an
-honestly MIT release.
+**A build made today carries no copyleft.** Both embedded and pending assets are permissive,
+so the exe is honestly MIT provided the two attribution notices below travel with it.
 
 ## Chess pieces
 
-### Shipping now — Merida
+### Shipping — CBurnett, under BSD-3-Clause
 
-`src/Bear.App/Assets/Pieces/merida/*.svg`
+`src/Bear.App/Assets/Pieces/cburnett/*.svg`
 
-Retrieved from [lichess-org/lila](https://github.com/lichess-org/lila) (`public/piece/merida/`),
-licensed **GPLv2 or later**. Asset files only — no Lichess source code is compiled in.
+By **Colin M. L. Burnett**. Retrieved from Wikimedia Commons via
+`https://commons.wikimedia.org/wiki/Special:FilePath/Chess_<piece>t45.svg`, twelve files,
+renamed to Bear's `{colour}{PIECE}.svg` convention:
 
-Because they are embedded in the executable, distributing a build carries the GPL's
-source-availability and attribution obligations for them.
+| Commons | Bear | | Commons | Bear |
+| --- | --- | --- | --- | --- |
+| `Chess_klt45.svg` | `wK.svg` | | `Chess_kdt45.svg` | `bK.svg` |
+| `Chess_qlt45.svg` | `wQ.svg` | | `Chess_qdt45.svg` | `bQ.svg` |
+| `Chess_rlt45.svg` | `wR.svg` | | `Chess_rdt45.svg` | `bR.svg` |
+| `Chess_blt45.svg` | `wB.svg` | | `Chess_bdt45.svg` | `bB.svg` |
+| `Chess_nlt45.svg` | `wN.svg` | | `Chess_ndt45.svg` | `bN.svg` |
+| `Chess_plt45.svg` | `wP.svg` | | `Chess_pdt45.svg` | `bP.svg` |
 
-### Planned replacement — CBurnett under BSD-3-Clause
+The artwork is **multi-licensed at the recipient's choice**: CC BY-SA 3.0, GFDL,
+**3-clause BSD**, or GPL. **Bear elects the 3-clause BSD option**, which requires the notice
+below and nothing else — no copyleft, no source offer, no constraint on Bear's own licence.
 
-CBurnett is **multi-licensed at the recipient's choice**: CC BY-SA 3.0, GFDL,
-3-clause BSD, *or* GPL. Bear elects the **3-clause BSD** option, which requires attribution
-here and nothing further — no copyleft, no source offer.
+Taken from Commons deliberately rather than from Lichess. The artwork is identical, but
+Lichess distributes its copy under GPL 2+ — that is *their* election, and it does not bind
+ours. The multi-licence offer lives with Cburnett's original upload.
 
-That election is what makes an MIT build honest. Lichess takes the same artwork under
-GPL 2+; that is their choice and it does not bind ours.
+> Copyright (c) Colin M. L. Burnett
+>
+> Redistribution and use in source and binary forms, with or without modification, are
+> permitted provided that the following conditions are met:
+>
+> 1. Redistributions of source code must retain the above copyright notice, this list of
+>    conditions and the following disclaimer.
+> 2. Redistributions in binary form must reproduce the above copyright notice, this list of
+>    conditions and the following disclaimer in the documentation and/or other materials
+>    provided with the distribution.
+> 3. The name of the author may not be used to endorse or promote products derived from
+>    this software without specific prior written permission.
+>
+> THIS SOFTWARE IS PROVIDED BY THE AUTHOR "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES,
+> INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+> A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY
+> DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING,
+> BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+> PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER
+> IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY
+> WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-When the swap lands, replace this section with the BSD-3-Clause text and credit to
-Colin M. L. Burnett, and record exactly which files were taken and from where.
+### Removed — Merida
+
+Previously embedded, from [lichess-org/lila](https://github.com/lichess-org/lila) under
+**GPLv2 or later**. Removed at M8: it was the last copyleft asset in the build, and its
+source-availability obligation was the only thing making an MIT claim awkward. The
+preferred set aesthetically, and dropped anyway — the licence decided it.
 
 ### Rejected — Merida_shaded
 
 Visually a slight improvement on Merida, and **AGPL-3.0** — stricter than the Merida it
 derives from, and the most restrictive option considered. Not usable here at any quality.
+
+### Rejected — Fritz and other proprietary sets
+
+ChessBase's piece sets are assets of a commercial product with no separate grant for the
+artwork. Being shipped inside proprietary software is what makes them unavailable, not
+incidental to it.
 
 ## Neural-network weights
 

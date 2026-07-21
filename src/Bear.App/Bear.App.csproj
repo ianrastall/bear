@@ -67,7 +67,7 @@
     Source: lichess-org/lila, GPLv2+ — see LICENSE-ASSETS.md.
   -->
   <ItemGroup>
-    <EmbeddedResource Include="Assets\Pieces\merida\*.svg" />
+    <EmbeddedResource Include="Assets\Pieces\cburnett\*.svg" />
   </ItemGroup>
 
   <ItemGroup>
