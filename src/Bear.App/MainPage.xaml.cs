@@ -33,6 +33,7 @@ public sealed partial class MainPage : Page
         _blackRemaining = _baseTime;
 
         _ticker.Tick += OnTick;
+        BoardView.GameEnding += OnGameEnding;
         AddAppMenuItems();
         RestorePalette();
         UpdateClockText();
@@ -87,8 +88,9 @@ public sealed partial class MainPage : Page
         copyPgn.Click += (_, _) =>
         {
             var package = new DataPackage { RequestedOperation = DataPackageOperation.Copy };
-            package.SetText(BuildPgn());
+            package.SetText(BuildSessionPgn());
             Clipboard.SetContent(package);
+            _exported = true;
         };
         menu.Items.Insert(1, copyPgn);
 
@@ -161,6 +163,36 @@ public sealed partial class MainPage : Page
         ("Rapid", [("10 + 0", 10, 0), ("10 + 5", 10, 5), ("15 + 10", 15, 10), ("20 + 0", 20, 0)]),
     ];
 
+    // --- the session log -------------------------------------------------
+
+    /// <summary>
+    /// Finished games from this run, oldest first. In memory only, and discarded on exit.
+    ///
+    /// A PGN file has always been able to hold many games, so collecting a session's worth
+    /// costs one list and needs no store — which is the point. Writing them to disk as they
+    /// finished would accumulate indefinitely and become a game database with extra steps,
+    /// and that is deliberately not in scope. Nobody plays ten thousand games in a sitting.
+    /// </summary>
+    private readonly List<string> _sessionGames = [];
+
+    /// <summary>Whether anything would be lost by quitting now.</summary>
+    public bool HasUnexportedGames => _sessionGames.Count > 0 || BoardView.Board.ExecutedMoves.Count > 0;
+
+    private bool _exported;
+
+    /// <summary>
+    /// Archive the outgoing game. Raised before the board is cleared, so
+    /// <c>BoardView.Board</c> still holds it.
+    /// </summary>
+    private void OnGameEnding(object? sender, EventArgs e)
+    {
+        if (BoardView.Board.ExecutedMoves.Count == 0)
+            return;
+
+        _sessionGames.Add(BuildPgn());
+        _exported = false;
+    }
+
     // --- PGN -------------------------------------------------------------
 
     /// <summary>
@@ -229,6 +261,61 @@ public sealed partial class MainPage : Page
         };
     }
 
+    /// <summary>
+    /// Every game of the session, the one in progress last. Games are separated by a blank
+    /// line, which is what the PGN spec asks for and what readers expect.
+    /// </summary>
+    private string BuildSessionPgn()
+    {
+        var games = new List<string>(_sessionGames);
+
+        if (BoardView.Board.ExecutedMoves.Count > 0)
+            games.Add(BuildPgn());
+
+        return games.Count == 0
+            ? BuildPgn()
+            : string.Join(Environment.NewLine + Environment.NewLine, games);
+    }
+
+    /// <summary>
+    /// Offer to export before quitting. Returns true if it is safe to close.
+    ///
+    /// The session log lives only in memory, so closing really does discard it — which is
+    /// exactly why this asks. Saving nothing is a legitimate answer and stays one click
+    /// away; the dialog defaults to saving because that is the choice you cannot undo.
+    /// </summary>
+    public async Task<bool> ConfirmExitAsync()
+    {
+        if (!HasUnexportedGames || _exported)
+            return true;
+
+        var played = _sessionGames.Count + (BoardView.Board.ExecutedMoves.Count > 0 ? 1 : 0);
+
+        var dialog = new ContentDialog
+        {
+            XamlRoot = XamlRoot,
+            Title = played == 1 ? "Save this game?" : $"Save these {played} games?",
+            Content = "The session's games haven't been exported. Closing discards them.",
+            PrimaryButtonText = "Save PGN…",
+            SecondaryButtonText = "Discard",
+            CloseButtonText = "Cancel",
+            DefaultButton = ContentDialogButton.Primary,
+        };
+
+        switch (await dialog.ShowAsync())
+        {
+            case ContentDialogResult.Primary:
+                await SavePgnAsync();
+                // If the file picker was itself cancelled, nothing was written — stay open
+                // rather than quietly dropping the games anyway.
+                return _exported;
+            case ContentDialogResult.Secondary:
+                return true;
+            default:
+                return false;
+        }
+    }
+
     private async Task SavePgnAsync()
     {
         var picker = new FileSavePicker
@@ -247,7 +334,10 @@ public sealed partial class MainPage : Page
         }
 
         if (await picker.PickSaveFileAsync() is { } file)
-            await FileIO.WriteTextAsync(file, BuildPgn());
+        {
+            await FileIO.WriteTextAsync(file, BuildSessionPgn());
+            _exported = true;
+        }
     }
 
     // --- clocks ----------------------------------------------------------
@@ -313,6 +403,9 @@ public sealed partial class MainPage : Page
     private void OnBoardChanged(object sender, EventArgs e)
     {
         var board = BoardView.Board;
+
+        // Any new move makes a previous export stale, so the exit prompt comes back.
+        _exported = false;
 
         if (board.ExecutedMoves.Count > 0 && !_clockRunning && !board.IsEndGame)
         {

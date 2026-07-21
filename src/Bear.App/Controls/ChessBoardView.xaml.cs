@@ -82,6 +82,13 @@ public sealed partial class ChessBoardView : UserControl
     /// <summary>Raised when a brand-new game starts, so hosts can reset clocks.</summary>
     public event EventHandler? GameReset;
 
+    /// <summary>
+    /// Raised just *before* the board is replaced, while <see cref="Board"/> still holds
+    /// the game being discarded. The session log listens here; by the time
+    /// <see cref="GameReset"/> fires the moves are gone.
+    /// </summary>
+    public event EventHandler? GameEnding;
+
     /// <summary>Raised when the palette changes, so the host can persist the choice.</summary>
     public event EventHandler? ThemeChanged;
 
@@ -99,6 +106,10 @@ public sealed partial class ChessBoardView : UserControl
 
     public void Reset()
     {
+        // Before anything is cleared: the host archives the outgoing game here, and it
+        // still needs Board to hold it.
+        GameEnding?.Invoke(this, EventArgs.Empty);
+
         Board = new ChessBoard();
         ClearSelection();
         Render();

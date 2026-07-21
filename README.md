@@ -119,8 +119,11 @@ a reason that outlives the itch.
   second — search is off, so a delay would be pure theatre. Bear moves when it has the move.
 - **User profiles.** Two people sharing one machine is likely, but not painful enough to
   justify accounts.
-- **A stored game database.** Keeping history implies a single owner for that history, which
-  smuggles profiles back in. The current game exports to PGN; that is the whole story.
+- **A stored game database.** Keeping history on disk implies a single owner for that
+  history, which smuggles profiles back in. What Bear does instead is keep the *session's*
+  games in memory and export them together — a PGN file has always held many games, so this
+  costs one list and no store. It is discarded on exit, which is the difference between a
+  session log and a database, and is why the app asks before closing.
 - **A tracked player rating.** Maia 2 wants the opponent's rating, which looks like a reason
   to build a database, a profile and a Glicko-2 implementation. It isn't.
   `preprocessing()` calls `map_to_category()` and bins the value into one of eleven
