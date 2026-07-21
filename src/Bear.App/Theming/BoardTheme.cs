@@ -242,6 +242,29 @@ public sealed record BoardTheme(
     public static BoardTheme? ByName(string? name) =>
         name is null ? null : All.FirstOrDefault(t => t.Name == name);
 
+    /// <summary>The family name given to a hand-picked colour.</summary>
+    public const string CustomFamily = "Custom";
+
+    public bool IsCustom => Family == CustomFamily;
+
+    /// <summary>
+    /// A palette from an arbitrary dark square. This is the whole point of deriving three
+    /// colours from one: the grid is a scannable shortlist, and anything outside it is
+    /// still one hex away. The shade tier is read back off the result so a custom board
+    /// still reports where it sits.
+    /// </summary>
+    public static BoardTheme FromCustom(uint darkHex)
+    {
+        var probe = FromDarkSquare(CustomFamily, Chroma.None, Shade.Mid, darkHex);
+        var shade = probe.DarkLuminance switch
+        {
+            < 0.20 => Shade.Dark,
+            < 0.30 => Shade.Mid,
+            _ => Shade.Light,
+        };
+        return probe with { Shade = shade };
+    }
+
     public static BoardTheme Default { get; } =
         ByName("Green-Soft-Mid") ?? All[0];
 }

@@ -774,9 +774,20 @@ public sealed partial class ChessBoardView : UserControl
             }
         }
 
+        var custom = new Button
+        {
+            Content = "Custom…",
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+            Margin = new Thickness(0, 6, 0, 0),
+        };
+
+        var panel = new StackPanel();
+        panel.Children.Add(grid);
+        panel.Children.Add(custom);
+
         var flyout = new Flyout
         {
-            Content = grid,
+            Content = panel,
             Placement = Microsoft.UI.Xaml.Controls.Primitives.FlyoutPlacementMode.Full,
         };
 
@@ -784,8 +795,77 @@ public sealed partial class ChessBoardView : UserControl
             if (child is Button b)
                 b.Click += (_, _) => flyout.Hide();
 
+        custom.Click += async (_, _) =>
+        {
+            flyout.Hide();
+            await ShowCustomColourPicker();
+        };
+
         flyout.ShowAt(Layers);
     }
+
+    /// <summary>
+    /// Pick any dark square at all. The grid is a shortlist, not a limit — the whole
+    /// palette is derived from this one colour, so there is nothing to enumerate.
+    ///
+    /// The tool's usable band is advisory here rather than enforced: a board outside it
+    /// says so, but nobody is stopped from choosing it. Refusing a colour outright would
+    /// be a strange thing for a picker to do.
+    /// </summary>
+    private async Task ShowCustomColourPicker()
+    {
+        var picker = new ColorPicker
+        {
+            Color = _theme.Dark,
+            IsAlphaEnabled = false,
+            IsHexInputVisible = true,
+            IsColorSliderVisible = true,
+        };
+
+        var warning = new TextBlock
+        {
+            FontSize = 12,
+            Opacity = 0.8,
+            Margin = new Thickness(0, 6, 0, 0),
+            TextWrapping = TextWrapping.Wrap,
+        };
+
+        void Describe(Windows.UI.Color c)
+        {
+            var candidate = BoardTheme.FromCustom(Pack(c));
+            warning.Text = candidate.Status switch
+            {
+                PaletteStatus.TooDark =>
+                    $"Very dark (luminance {candidate.DarkLuminance:F2}). Pieces may be hard to read.",
+                PaletteStatus.TooLight =>
+                    $"Very light (luminance {candidate.DarkLuminance:F2}). The two square colours will be close.",
+                _ => $"Luminance {candidate.DarkLuminance:F2} — comfortable.",
+            };
+        }
+
+        Describe(picker.Color);
+        picker.ColorChanged += (_, e) => Describe(e.NewColor);
+
+        var body = new StackPanel();
+        body.Children.Add(picker);
+        body.Children.Add(warning);
+
+        var dialog = new ContentDialog
+        {
+            XamlRoot = XamlRoot,
+            Title = "Board colour",
+            Content = body,
+            PrimaryButtonText = "Use it",
+            CloseButtonText = "Cancel",
+            DefaultButton = ContentDialogButton.Primary,
+        };
+
+        if (await dialog.ShowAsync() == ContentDialogResult.Primary)
+            Theme = BoardTheme.FromCustom(Pack(picker.Color));
+    }
+
+    private static uint Pack(Windows.UI.Color c) =>
+        ((uint)c.R << 16) | ((uint)c.G << 8) | c.B;
 
     /// <summary>
     /// One palette as a miniature board: two dark squares, two light, ringed in the

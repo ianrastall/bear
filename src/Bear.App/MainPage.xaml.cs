@@ -44,12 +44,29 @@ public sealed partial class MainPage : Page
     /// </summary>
     private void RestorePalette()
     {
-        if (BoardTheme.ByName(_settings.BoardPalette) is { } saved)
+        if (_settings.BoardPaletteCustom is { } hex
+            && uint.TryParse(hex, System.Globalization.NumberStyles.HexNumber, null, out var rgb))
+        {
+            BoardView.Theme = BoardTheme.FromCustom(rgb);
+        }
+        else if (BoardTheme.ByName(_settings.BoardPalette) is { } saved)
+        {
             BoardView.Theme = saved;
+        }
 
         BoardView.ThemeChanged += (_, _) =>
         {
-            _settings.BoardPalette = BoardView.Theme.Name;
+            var theme = BoardView.Theme;
+            if (theme.IsCustom)
+            {
+                _settings.BoardPaletteCustom =
+                    $"{theme.Dark.R:X2}{theme.Dark.G:X2}{theme.Dark.B:X2}";
+            }
+            else
+            {
+                _settings.BoardPalette = theme.Name;
+                _settings.BoardPaletteCustom = null;
+            }
             _settings.Save();
         };
     }

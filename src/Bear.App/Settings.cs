@@ -22,6 +22,14 @@ internal sealed class Settings
     /// </summary>
     public string? BoardPalette { get; set; }
 
+    /// <summary>
+    /// A hand-picked dark square as <c>RRGGBB</c>, set only when the palette came from
+    /// <c>Custom…</c> rather than the grid. Takes precedence over
+    /// <see cref="BoardPalette"/> when present, since a custom colour has no grid name to
+    /// look up.
+    /// </summary>
+    public string? BoardPaletteCustom { get; set; }
+
     private static readonly JsonSerializerOptions Options = new() { WriteIndented = true };
 
     private static string FilePath => Path.Combine(

@@ -284,7 +284,7 @@ palette *name*, not its colours, so `BoardTheme.All` stays the single source of 
 unknown name falls back to `BoardTheme.Default`. Palette only: no rating, no player name, no
 window geometry. One key is not an architecture, and it stays that way.
 
-**M2a — 111 palettes on a colour-space grid. ✅ Done; the custom picker is still to come.** Twenty was thin, but the
+**M2a — 111 palettes on a colour-space grid, plus a custom picker. ✅ Done.** Twenty was thin, but the
 count was never the hard part. Any large set has to be *navigable*, and evocative names are
 not navigation: nobody recalls the difference between Cadet, Powder and Dodger blue, so a
 list of 137 poetic labels is a list you read rather than a set you choose from.
