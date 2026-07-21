@@ -1,64 +1,28 @@
-## Build output
-[Bb]in/
-[Oo]bj/
-[Oo]ut/
-[Ll]og/
-[Ll]ogs/
-artifacts/
-
-## Visual Studio / Rider / VS Code
-.vs/
-.idea/
-*.user
-*.suo
-*.userprefs
-*.DotSettings.user
-.vscode/*
-!.vscode/launch.json
-!.vscode/tasks.json
-!.vscode/extensions.json
-
-## NuGet
-*.nupkg
-*.snupkg
-packages/
-!packages/build/
-
-## MSIX / packaging
-AppPackages/
-BundleArtifacts/
-*.appx
-*.appxbundle
-*.msix
-*.msixbundle
-*.cer
-*.pfx
-Generated Files/
-
-## Engine binaries and weights — large, licensed separately, fetched not committed.
-## See tools/ for the acquisition script.
-engines/
-weights/
-*.pb.gz
-*.nnue
-*.onnx
-*.pt
-syzygy/
-
-## Local databases
-*.db
-*.db-shm
-*.db-wal
-
-## Python (tools/)
+## Python
 __pycache__/
 *.pyc
+*.pyo
+.venv/
+venv/
+*.egg-info/
+
+## Recorded games
+games/
+
+## Model weights — large, fetched by maia3-cache, never committed
+artifacts/
+*.onnx
+*.pt
+*.safetensors
+
+## Editors
+.vs/
+.idea/
+.vscode/*
+!.vscode/launch.json
+!.vscode/extensions.json
 
 ## OS
 Thumbs.db
 desktop.ini
 .DS_Store
-
-## Verification harness build output
-tools/Bear.Maia.Verify/bin/
-tools/Bear.Maia.Verify/obj/
