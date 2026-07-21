@@ -19,15 +19,18 @@ from PySide6.QtGui import QColor, QPainter
 from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtWidgets import QMenu, QWidget
 
+from bear import theme
+from bear.theme import Palette
+
 ASSETS = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "assets")
 
-#: Board colours. Muted enough that the pieces, not the squares, carry the contrast.
-LIGHT = QColor("#efe4d0")
-DARK = QColor("#a8825c")
 LAST_MOVE = QColor(255, 214, 92, 110)
 SELECTED = QColor(120, 190, 120, 130)
 TARGET = QColor(40, 40, 40, 46)
 CHECK = QColor(214, 78, 62, 150)
+
+#: How much of the board's width the border takes on each side.
+BORDER = 0.025
 
 
 class BoardView(QWidget):
@@ -35,7 +38,8 @@ class BoardView(QWidget):
 
     move_made = Signal(chess.Move)
 
-    def __init__(self, piece_set: str = "merida", parent: QWidget | None = None) -> None:
+    def __init__(self, piece_set: str = "merida", palette: Palette | None = None,
+                 parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.board = chess.Board()
         self.flipped = False
@@ -46,10 +50,20 @@ class BoardView(QWidget):
         self._selected: chess.Square | None = None
         self._targets: set[chess.Square] = set()
         self._renderers: dict[str, QSvgRenderer] = {}
+        self.set_palette(palette or theme.get(None))
         self.set_piece_set(piece_set)
 
         self.setMinimumSize(320, 320)
         self.setContextMenuPolicy(Qt.ContextMenuPolicy.NoContextMenu)
+
+    # -- colours ----------------------------------------------------------
+
+    def set_palette(self, palette: Palette) -> None:
+        self.palette_choice = palette
+        self._light = QColor(*palette.light)
+        self._dark = QColor(*palette.dark)
+        self._border = QColor(*palette.border)
+        self.update()
 
     # -- pieces -----------------------------------------------------------
 
@@ -67,12 +81,19 @@ class BoardView(QWidget):
     # -- geometry ---------------------------------------------------------
 
     @property
+    def _extent(self) -> float:
+        """The full drawn area, border included."""
+        return min(self.width(), self.height())
+
+    @property
     def _side(self) -> float:
-        return min(self.width(), self.height()) / 8.0
+        return (self._extent * (1.0 - 2 * BORDER)) / 8.0
 
     def _origin(self) -> tuple[float, float]:
-        side = self._side * 8
-        return (self.width() - side) / 2.0, (self.height() - side) / 2.0
+        """Top-left of the playing surface, inside the border."""
+        inset = self._extent * BORDER
+        return ((self.width() - self._extent) / 2.0 + inset,
+                (self.height() - self._extent) / 2.0 + inset)
 
     def _square_rect(self, square: chess.Square) -> QRectF:
         file_, rank = chess.square_file(square), chess.square_rank(square)
@@ -101,10 +122,16 @@ class BoardView(QWidget):
 
         last = self.board.move_stack[-1] if self.board.move_stack else None
 
+        # The border is the third derived tone, and the reason the derivation exists.
+        extent = self._extent
+        painter.fillRect(QRectF((self.width() - extent) / 2.0,
+                                (self.height() - extent) / 2.0, extent, extent),
+                         self._border)
+
         for square in chess.SQUARES:
             rect = self._square_rect(square)
             light = (chess.square_file(square) + chess.square_rank(square)) % 2 == 1
-            painter.fillRect(rect, LIGHT if light else DARK)
+            painter.fillRect(rect, self._light if light else self._dark)
 
             if last is not None and square in (last.from_square, last.to_square):
                 painter.fillRect(rect, LAST_MOVE)

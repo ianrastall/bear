@@ -12,6 +12,7 @@ Calls block for as long as a forward pass takes, so nothing here may run on the 
 
 from __future__ import annotations
 
+import os
 import shutil
 import sys
 from dataclasses import dataclass
@@ -51,6 +52,26 @@ def _command(model: str) -> list[str]:
     ]
 
 
+def _environment() -> dict[str, str] | None:
+    """Let Bear run against a maia3 *clone* that was never pip-installed.
+
+    Set `BEAR_MAIA3` to the checkout. Only consulted when maia3 is not importable, so an
+    installed copy always wins.
+    """
+    import importlib.util
+
+    if importlib.util.find_spec("maia3") is not None:
+        return None
+
+    clone = os.environ.get("BEAR_MAIA3")
+    if not clone or not os.path.isdir(clone):
+        return None
+
+    environment = dict(os.environ)
+    environment["PYTHONPATH"] = clone + os.pathsep + environment.get("PYTHONPATH", "")
+    return environment
+
+
 class Maia:
     """One Maia 3 process, configured for a rating."""
 
@@ -62,11 +83,15 @@ class Maia:
         self._top_p = top_p
 
         try:
-            self._engine = chess.engine.SimpleEngine.popen_uci(_command(model), timeout=120)
+            self._engine = chess.engine.SimpleEngine.popen_uci(
+                _command(model), env=_environment(), timeout=600)
         except Exception as exc:  # noqa: BLE001 - surfaced to the UI as one condition
             raise EngineUnavailable(
-                f"could not start Maia 3 ({model}). Install it with "
-                f"`pip install -e <maia3 repo>` and pre-fetch weights with `maia3-cache`."
+                f"Could not start Maia 3 ({model}).\n\n"
+                f"    pip install -e <maia3 checkout>\n"
+                f"    maia3-cache --model {model}\n\n"
+                f"Or set BEAR_MAIA3 to a maia3 checkout to run it without installing.\n\n"
+                f"{exc}"
             ) from exc
 
         self._apply()

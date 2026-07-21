@@ -1,14 +1,33 @@
-"""Palettes on a regular Hue x Saturation x Luminance grid.
+"""Choose Bear's board palettes and write them to `bear/palettes.py`.
 
-Instead of scattering samples and naming them afterwards, solve for the cell:
-for each (hue, saturation tier, luminance tier), binary-search the HSL lightness
-that lands the dark square's WCAG luminance in the target tier. Luminance rises
-monotonically with L at fixed H/S, so the search always converges if the tier is
-reachable at all -- and "is it reachable" is exactly what we need to find out.
+Run:  python tools/gen_palettes.py
+
+Palettes sit on a regular grid: twelve hue families, three saturation tiers, three shade
+tiers. Rather than scattering samples and naming them afterwards, each cell is *solved*:
+binary-search the HSL lightness that lands the dark square's relative luminance on the
+tier's target. Luminance rises monotonically with lightness at fixed hue and saturation, so
+the search always converges when the cell is reachable at all — and whether it is reachable
+is exactly what needs finding out.
+
+Saturation is capped well below full. A maximum-spread search in Lab will happily pick
+`#0D87F2`, which is a fine colour and a terrible chessboard; the grid keeps every square
+something you can look at for an hour.
+
+Build time only. Bear imports the generated table, so startup stays instant.
 """
 
+from __future__ import annotations
 
-from _colormath import hsl_to_rgb, luminance, rgb_to_hsl, from_dark_square, clamp
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from bear.colormath import (clamp, from_dark_square, hsl_to_rgb,  # noqa: E402
+                            luminance, to_hex)
+
+OUTPUT = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                      "bear", "palettes.py")
 
 FAMILIES = [
     ("Red", 5), ("Orange", 25), ("Amber", 45), ("Olive", 68),
@@ -16,69 +35,79 @@ FAMILIES = [
     ("Indigo", 250), ("Violet", 285), ("Magenta", 315), ("Rose", 338),
 ]
 
-SATS = [("Muted", 0.14), ("Soft", 0.30), ("Rich", 0.46)]
+CHROMA = [("Muted", 0.14), ("Soft", 0.30), ("Rich", 0.46)]
 
-# Three tiers spanning the Ok band (0.11-0.42), by target luminance.
-LUMS = [("Dark", 0.155), ("Mid", 0.245), ("Light", 0.350)]
+#: Three shades spanning the usable luminance band (0.11-0.42), by target luminance.
+SHADE = [("Dark", 0.155), ("Mid", 0.245), ("Light", 0.350)]
 
 TOLERANCE = 0.006
 
+#: The board Bear opens with. A warm, low-contrast olive — a traditional wooden board.
+DEFAULT = "Olive-Soft-Mid"
 
-def solve_l(hue_deg, sat, target_lum):
-    """Binary-search HSL lightness for a dark square at the target luminance."""
-    lo, hi = 0.05, 0.95
-    h = hue_deg / 360.0
+
+def solve(hue_degrees: float, saturation: float, target: float):
+    """Binary-search the lightness whose dark square hits the target luminance."""
+    low, high = 0.05, 0.95
+    hue = hue_degrees / 360.0
     for _ in range(60):
-        mid = (lo + hi) / 2.0
-        lum = luminance(hsl_to_rgb(h, clamp(sat, 0.0, 0.95), mid))
-        if lum < target_lum:
-            lo = mid
+        middle = (low + high) / 2.0
+        if luminance(hsl_to_rgb(hue, clamp(saturation, 0.0, 0.95), middle)) < target:
+            low = middle
         else:
-            hi = mid
-    l = (lo + hi) / 2.0
-    c = hsl_to_rgb(h, clamp(sat, 0.0, 0.95), l)
-    return c, abs(luminance(c) - target_lum)
+            high = middle
+    colour = hsl_to_rgb(hue, clamp(saturation, 0.0, 0.95), (low + high) / 2.0)
+    return colour, abs(luminance(colour) - target)
 
 
-def main():
-    rows, misses = [], []
-    for fam, hue in FAMILIES:
-        for sname, sat in SATS:
-            for lname, target in LUMS:
-                c, err = solve_l(hue, sat, target)
-                if err > TOLERANCE:
-                    misses.append((fam, sname, lname, err, luminance(c)))
+def main() -> int:
+    rows, unreachable = [], []
+
+    for family, hue in FAMILIES:
+        for chroma, saturation in CHROMA:
+            for shade, target in SHADE:
+                colour, error = solve(hue, saturation, target)
+                if error > TOLERANCE:
+                    unreachable.append((family, chroma, shade, luminance(colour)))
                     continue
-                rows.append((fam, sname, lname, c))
+                rows.append((family, chroma, shade, colour))
 
-    neutrals = []
-    for lname, target in LUMS:
-        c, err = solve_l(0, 0.0, target)
-        neutrals.append(("Neutral", "-", lname, c))
+    for shade, target in SHADE:
+        colour, error = solve(0, 0.0, target)
+        if error <= TOLERANCE:
+            rows.append(("Neutral", "Grey", shade, colour))
 
-    print(f"# grid cells requested: {len(FAMILIES) * len(SATS) * len(LUMS)}")
-    print(f"# cells solved:         {len(rows)}")
-    print(f"# unreachable cells:    {len(misses)}")
-    for m in misses:
-        print(f"    MISS {m[0]}/{m[1]}/{m[2]}  best lum {m[4]:.3f} (target off by {m[3]:.3f})")
-    print()
+    requested = len(FAMILIES) * len(CHROMA) * len(SHADE)
+    print(f"grid cells requested : {requested}")
+    print(f"cells solved         : {len(rows)}")
+    print(f"unreachable          : {len(unreachable)}")
+    for family, chroma, shade, best in unreachable:
+        print(f"    MISS {family}/{chroma}/{shade}  best luminance {best:.3f}")
 
-    hexes = set()
-    dupes = 0
-    for fam, s, l, c in rows + neutrals:
-        k = (c[0] << 16) | (c[1] << 8) | c[2]
-        if k in hexes:
-            dupes += 1
-        hexes.add(k)
-    print(f"# total palettes: {len(rows) + len(neutrals)}   duplicate hexes: {dupes}")
-    print()
+    if not any(f"{f}-{c}-{s}" == DEFAULT for f, c, s, _ in rows):
+        print(f"\nERROR: default {DEFAULT!r} is not among the solved cells")
+        return 1
 
-    for fam, s, l, c in rows + neutrals:
-        dark, *_ = from_dark_square(c)
-        chroma = "None" if s == "-" else s
-        call = f'FromDarkSquare("{fam}", Chroma.{chroma}, Shade.{l}, 0x{c[0]:02X}{c[1]:02X}{c[2]:02X}),'
-        print(f"        {call}".ljust(74) + f"// lum {luminance(dark):.3f}")
+    with open(OUTPUT, "w", encoding="utf-8", newline="\n") as handle:
+        handle.write('"""Board palettes. Generated by tools/gen_palettes.py — do not edit.\n\n')
+        handle.write("Each entry is the *dark square*. The light square and the border are\n")
+        handle.write("derived from it at runtime by bear.colormath.from_dark_square, so a\n")
+        handle.write('palette can only ever be internally consistent.\n"""\n\n')
+        handle.write("from __future__ import annotations\n\n")
+        handle.write(f'DEFAULT = "{DEFAULT}"\n\n')
+        handle.write("#: (family, chroma, shade, dark square hex)\n")
+        handle.write("PALETTES: list[tuple[str, str, str, str]] = [\n")
+        for family, chroma, shade, colour in rows:
+            dark, light, border = from_dark_square(colour)
+            entry = f'    ("{family}", "{chroma}", "{shade}", "{to_hex(colour)}"),'
+            handle.write(entry.ljust(56)
+                         + f"  # lum {luminance(dark):.3f}"
+                         + f"  light {to_hex(light)}  border {to_hex(border)}\n")
+        handle.write("]\n")
+
+    print(f"\nwrote {OUTPUT}  ({len(rows)} palettes)")
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

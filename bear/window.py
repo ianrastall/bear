@@ -16,10 +16,12 @@ from PySide6.QtWidgets import (QHBoxLayout, QLabel, QMainWindow, QMenu,
                                QMessageBox, QVBoxLayout, QWidget)
 
 from bear import openings as openings_module
+from bear import theme
 from bear.boardview import BoardView
 from bear.clock import Clocks, format_time
 from bear.engine import MODELS, EngineUnavailable, Maia
 from bear.gamelog import GameLog
+from bear.settings import Settings
 
 TIME_CONTROLS = [("1+0", 1, 0), ("3+2", 3, 2), ("5+0", 5, 0),
                  ("10+0", 10, 0), ("15+10", 15, 10), ("Unlimited", 0, 0)]
@@ -29,7 +31,7 @@ STRENGTHS = [800, 1000, 1200, 1400, 1600, 1800, 2000, 2200]
 class EngineWorker(QObject):
     """Owns the Maia process. Lives on its own thread; only ever spoken to by signal."""
 
-    move_ready = Signal(object)
+    move_ready = Signal(object, int)
     failed = Signal(str)
     started = Signal()
 
@@ -47,13 +49,15 @@ class EngineWorker(QObject):
         else:
             self.started.emit()
 
-    @Slot(object)
-    def think(self, board: chess.Board) -> None:
+    @Slot(object, int)
+    def think(self, board: chess.Board, generation: int) -> None:
+        """Answer a position. The generation is carried through untouched so the window
+        can tell a live reply from one belonging to a game that has since been abandoned."""
         if self._maia is None:
             self.failed.emit("Maia is not running.")
             return
         try:
-            self.move_ready.emit(self._maia.move(board))
+            self.move_ready.emit(self._maia.move(board), generation)
         except Exception as exc:  # noqa: BLE001 - any failure is "no move"
             self.failed.emit(str(exc))
 
@@ -79,24 +83,31 @@ class EngineWorker(QObject):
 
 
 class BearWindow(QMainWindow):
-    think_requested = Signal(object)
+    think_requested = Signal(object, int)
     elo_requested = Signal(int)
     model_requested = Signal(str)
 
-    def __init__(self, model: str = "maia3-5m", elo: int = 1500,
-                 minutes: float = 10, increment: float = 0) -> None:
+    def __init__(self, model: str | None = None, elo: int | None = None,
+                 time_control: str | None = None) -> None:
         super().__init__()
         self.setWindowTitle("Bear")
 
+        # Stored choices are the defaults; anything passed on the command line wins.
+        self.settings = Settings.load()
+        self.model = model or self.settings.model
+        self.elo = elo or self.settings.elo
+        self.time_control = time_control or self.settings.time_control
+        if not any(name == self.time_control for name, _m, _i in TIME_CONTROLS):
+            self.time_control = "10+0"
+
         self.board = chess.Board()
-        self.elo = elo
-        self.model = model
         self.human_colour: chess.Color = chess.WHITE
-        self.clocks = Clocks(minutes, increment)
-        self.time_control = "10+0"
+        self.clocks = Clocks(10, 0)
         self.openings = self._load_openings()
         self.log = GameLog()
         self._engine_ready = False
+        #: Bumped on every new game, so replies for an abandoned one can be discarded.
+        self._generation = 0
 
         self._build()
         self._start_engine()
@@ -115,7 +126,7 @@ class BearWindow(QMainWindow):
             return None
 
     def _build(self) -> None:
-        self.view = BoardView("merida")
+        self.view = BoardView(self.settings.pieces, theme.get(self.settings.palette))
         self.view.move_made.connect(self.on_human_move)
         self.view.customContextMenuRequested.connect(self._show_menu)
 
@@ -174,6 +185,8 @@ class BearWindow(QMainWindow):
 
     def new_game(self, human_white: bool | None = None) -> None:
         import random
+        # Anything Maia is still thinking about belongs to the game being abandoned.
+        self._generation += 1
         self.board = chess.Board()
         self.log.reset()
         self.human_colour = (chess.WHITE if human_white else chess.BLACK) \
@@ -189,10 +202,11 @@ class BearWindow(QMainWindow):
         self.clocks.reset(minutes or 0, increment)
         self._refresh()
 
+        # Whoever is to move is on the clock, Maia included.
+        if self.time_control != "Unlimited":
+            self.clocks[self.board.turn].start()
         if self.board.turn != self.human_colour:
             self._ask_maia()
-        elif self.time_control != "Unlimited":
-            self.clocks[self.board.turn].start()
 
     @Slot(object)
     def on_human_move(self, move: chess.Move) -> None:
@@ -204,10 +218,15 @@ class BearWindow(QMainWindow):
         if not self._engine_ready:
             return
         self.view.frozen = True
-        self.think_requested.emit(self.board.copy())
+        self.think_requested.emit(self.board.copy(), self._generation)
 
-    @Slot(object)
-    def on_engine_move(self, reply) -> None:
+    @Slot(object, int)
+    def on_engine_move(self, reply, generation: int) -> None:
+        # A reply for a game that has since been restarted must be dropped. Its move is
+        # very often legal in the new position too, so "is it legal" is not the test.
+        if generation != self._generation:
+            return
+
         self.view.frozen = False
         # Maia scored the position it was handed, which the previous move created.
         if reply.score is not None:
@@ -308,26 +327,54 @@ class BearWindow(QMainWindow):
         for name in ("merida", "cburnett"):
             action = QAction(name.title(), pieces, checkable=True)
             action.setChecked(name == self.view.piece_set)
-            action.triggered.connect(lambda _=False, n=name: self.view.set_piece_set(n))
+            action.triggered.connect(lambda _=False, n=name: self._set_pieces(n))
             pieces.addAction(action)
+
+        # 99 palettes is far too many for one list, so they nest by hue family.
+        board_menu = menu.addMenu("Board")
+        current = self.view.palette_choice.key
+        for family in theme.families():
+            submenu = board_menu.addMenu(family)
+            for palette in theme.in_family(family):
+                action = QAction(palette.label, submenu, checkable=True)
+                action.setChecked(palette.key == current)
+                action.triggered.connect(
+                    lambda _=False, p=palette: self._set_palette(p))
+                submenu.addAction(action)
 
         menu.addSeparator()
         menu.addAction("Quit", self.close)
         menu.exec(self.view.mapToGlobal(position))
 
+    def _set_palette(self, palette) -> None:
+        self.view.set_palette(palette)
+        self.settings.palette = palette.key
+        self.settings.save()
+
+    def _set_pieces(self, name: str) -> None:
+        self.view.set_piece_set(name)
+        self.settings.pieces = name
+        self.settings.save()
+
     def _set_elo(self, value: int) -> None:
         self.elo = value
         self.elo_requested.emit(value)
+        self.settings.elo = value
+        self.settings.save()
         self._refresh()
 
     def _set_model(self, name: str) -> None:
         self.model = name
         self._engine_ready = False
         self.model_requested.emit(name)
+        self.settings.model = name
+        self.settings.save()
         self._refresh()
 
     def _set_time(self, name: str) -> None:
         self.time_control = name
+        self.settings.time_control = name
+        self.settings.save()
         self.new_game(self.human_colour == chess.WHITE)
 
     # -- engine lifecycle -------------------------------------------------
@@ -348,9 +395,22 @@ class BearWindow(QMainWindow):
         self._refresh()
         QMessageBox.warning(self, "Maia 3 unavailable", message)
 
-    def closeEvent(self, event) -> None:
+    def shutdown(self) -> None:
+        """Stop the engine thread. Idempotent: closing the window and the application
+        quitting both arrive here, and a thread still running at interpreter exit takes
+        the process down with it."""
+        if getattr(self, "_stopped", False):
+            return
+        self._stopped = True
+
         self._ticker.stop()
-        self._worker.shutdown()
+        # shutdown() must run *on* the worker thread, so go through the event loop.
+        QTimer.singleShot(0, self._worker.shutdown)
         self._thread.quit()
-        self._thread.wait(5000)
+        if not self._thread.wait(5000):
+            self._thread.terminate()
+            self._thread.wait(1000)
+
+    def closeEvent(self, event) -> None:
+        self.shutdown()
         super().closeEvent(event)
