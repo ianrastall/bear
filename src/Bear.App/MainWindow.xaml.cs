@@ -32,31 +32,16 @@ public sealed partial class MainWindow : Window
     }
 
     /// <summary>
-    /// Guards against re-entry: the close we perform ourselves after the prompt must not
-    /// raise the prompt again.
-    /// </summary>
-    private bool _closeConfirmed;
-
-    /// <summary>
-    /// Offer to export the session's games before quitting.
+    /// Record a game abandoned mid-play, so quitting is not a way to lose one.
     ///
-    /// <see cref="Microsoft.UI.Windowing.AppWindow.Closing"/> cannot be awaited, so the
-    /// close is cancelled, the dialog is shown, and the window closes itself afterwards if
-    /// the answer allows it.
+    /// Nothing is asked here. Every finished game is already on disk, so there is no
+    /// decision left to put in front of someone who is trying to close a window.
     /// </summary>
-    private async void OnClosing(
+    private void OnClosing(
         Microsoft.UI.Windowing.AppWindow sender,
         Microsoft.UI.Windowing.AppWindowClosingEventArgs args)
     {
-        if (_closeConfirmed || RootFrame.Content is not MainPage page)
-            return;
-
-        args.Cancel = true;
-
-        if (await page.ConfirmExitAsync())
-        {
-            _closeConfirmed = true;
-            Close();
-        }
+        if (RootFrame.Content is MainPage page)
+            page.FlushGameLog();
     }
 }
