@@ -115,6 +115,42 @@ foreach (var c in golden.GetProperty("cases").EnumerateArray())
     }
 }
 
+// End-to-end: encoder -> ONNX Runtime -> decoder must reproduce the move the Python played.
+// This is the check that matters. Everything above verifies a piece; this verifies the whole.
+var modelPath = Path.Combine(repo, "artifacts", "models", "maia2-rapid.onnx");
+if (File.Exists(modelPath))
+{
+    using var engine = MaiaEngine.FromFile(modelPath, policy);
+    var sw = System.Diagnostics.Stopwatch.StartNew();
+    var moves_played = 0;
+
+    foreach (var c in golden.GetProperty("cases").EnumerateArray())
+    {
+        var fen = c.GetProperty("fen").GetString()!;
+        var legalReal = c.GetProperty("legal").EnumerateArray()
+            .Select(x => moves[x.GetInt32()])
+            .Select(m => c.GetProperty("mirrored").GetBoolean() ? MaiaEncoder.MirrorMove(m) : m)
+            .ToArray();
+
+        foreach (var e in c.GetProperty("by_elo").EnumerateArray())
+        {
+            var expected = e.GetProperty("top")[0].GetProperty("uci").GetString();
+            var actual = engine.Play(fen, legalReal, e.GetProperty("elo_self").GetInt32());
+            moves_played++;
+            Check(actual == expected, $"PLAY {fen} @{e.GetProperty("elo_self").GetInt32()} -> {actual}, expected {expected}");
+        }
+    }
+
+    sw.Stop();
+    Console.WriteLine();
+    Console.WriteLine($"end-to-end: {moves_played} moves, {sw.ElapsedMilliseconds / (double)moves_played:F1} ms each");
+}
+else
+{
+    Console.WriteLine();
+    Console.WriteLine($"(skipping end-to-end: {modelPath} not found — run tools/export_onnx.py)");
+}
+
 // Mirroring must be its own inverse, or a move could survive the round trip subtly changed.
 foreach (var m in moves)
 {

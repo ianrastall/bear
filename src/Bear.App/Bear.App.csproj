@@ -71,12 +71,28 @@
     <EmbeddedResource Include="Assets\maia2-moves.txt" />
   </ItemGroup>
 
+  <!--
+    The Maia 2 weights, ~89 MB each. Not in the repository and not required to build:
+    artifacts/ is ignored, so a fresh clone compiles and runs with no opponent until
+    tools/export_onnx.py has been run. LogicalName is pinned so the resource id does not
+    depend on where the files sit on disk.
+  -->
+  <ItemGroup>
+    <EmbeddedResource Include="$(MSBuildThisFileDirectory)..\..\artifacts\models\maia2-blitz.onnx"
+                      LogicalName="Bear.App.Assets.maia2-blitz.onnx"
+                      Condition="Exists('$(MSBuildThisFileDirectory)..\..\artifacts\models\maia2-blitz.onnx')" />
+    <EmbeddedResource Include="$(MSBuildThisFileDirectory)..\..\artifacts\models\maia2-rapid.onnx"
+                      LogicalName="Bear.App.Assets.maia2-rapid.onnx"
+                      Condition="Exists('$(MSBuildThisFileDirectory)..\..\artifacts\models\maia2-rapid.onnx')" />
+  </ItemGroup>
+
   <ItemGroup>
     <Manifest Include="$(ApplicationManifest)" />
   </ItemGroup>
 
   <ItemGroup>
     <PackageReference Include="Gera.Chess" Version="1.2.0" />
+    <PackageReference Include="Microsoft.ML.OnnxRuntime" Version="1.27.1" />
     <PackageReference Include="Microsoft.Windows.SDK.BuildTools" Version="10.0.28000.2270" />
     <PackageReference Include="Microsoft.Windows.SDK.BuildTools.WinApp" Version="0.5.0" />
     <PackageReference Include="Microsoft.WindowsAppSDK" Version="2.3.1" />

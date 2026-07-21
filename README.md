@@ -367,11 +367,25 @@ reproducing. `tools/make_golden.py` writes `Assets/maia2-moves.txt` and it ships
 Masking to legal moves is not a nicety — the policy head scores all 1880 entries and its
 unmasked top pick is routinely illegal in a given position.
 
-**M5 — Maia plays.** Wire M4 to the board: bucket from the strength selector, model from the
-time control, move on the opponent's turn, no delay, no reporting. Pass the selector's bucket
-as **both** `elos_self` and `elos_oppo` — see *The opponent*. **Randomise colour** at the
-start of each game, and flip the board to suit so the player always faces up the board.
-First game against a real human-like opponent.
+**M5 — Maia plays. ✅ Done.** `Maia/MaiaEngine.cs` runs the model in-process through
+`Microsoft.ML.OnnxRuntime`, on a background thread, with no artificial delay. The whole
+pipeline is verified end to end by `tools/Bear.Maia.Verify`: **3462/3462 checks**, of which
+80 are complete moves — encoder, ONNX Runtime and decoder together reproducing exactly the
+move maia2's Python played, across 20 positions and 4 rating pairs.
+
+Colour is **randomised each game**, and the board flips so the player always looks up it.
+The PGN's `White`/`Black` and the single `Elo` tag follow that assignment.
+
+The time control picks the model, as *The opponent* describes; changing between a Blitz and
+a Rapid control swaps which 89 MB session is open, so the load is not repeated per move.
+
+**The weights are not in the repository** and are not needed to build. `artifacts/` is
+ignored, so the `EmbeddedResource` entries are conditional and a fresh clone compiles and
+runs with no opponent at all — `TryLoad` returns null and the board simply stays open to
+both sides. Run `tools/export_onnx.py` to get an opponent.
+
+Session single-threaded on purpose: a 4-6 ms forward pass gains nothing from a thread pool.
+The debug build's `Bear.dll` is 178 MB with both models embedded, and builds in ~15 s.
 
 **M6 — File commands and the game log. ✅ Done, pending M5 for colour.** Group the file operations together at the top of the
 right-click menu: New game, Copy PGN (exists), and Save PGN as… Add the Seven Tag Roster

@@ -58,6 +58,56 @@ public sealed partial class ChessBoardView : UserControl
     /// <summary>True when the board is drawn from Black's side.</summary>
     public bool Flipped { get; private set; }
 
+    /// <summary>
+    /// The colour the player controls. When set, the board ignores input on the other
+    /// side's turn so a move cannot be made for the opponent. Null means both sides are
+    /// human, which is what happens when no Maia model is embedded.
+    /// </summary>
+    public PieceColor? HumanColor { get; set; }
+
+    /// <summary>Whether the player may move the piece currently to move.</summary>
+    private bool HumanToMove => HumanColor is null || Board.Turn == HumanColor;
+
+    /// <summary>Raised when it becomes the opponent's turn, with the position to answer.</summary>
+    public event EventHandler? OpponentToMove;
+
+    /// <summary>
+    /// Play a move given in UCI, as the opponent does. Returns false if it does not match
+    /// a legal move — a safety net, since a move arriving from outside is not trusted the
+    /// way one produced by the board's own hit-testing is.
+    /// </summary>
+    public bool PlayUci(string uci)
+    {
+        var move = Board.Moves().FirstOrDefault(m => Uci(m) == uci);
+        if (move is null)
+            return false;
+
+        PlayMove(move);
+        return true;
+    }
+
+    /// <summary>
+    /// A move as UCI. Promotions are read off the SAN, which is where this library records
+    /// them in a form that is stable to read.
+    /// </summary>
+    public static string Uci(Move move)
+    {
+        var text =
+            $"{(char)('a' + move.OriginalPosition.X)}{move.OriginalPosition.Y + 1}"
+            + $"{(char)('a' + move.NewPosition.X)}{move.NewPosition.Y + 1}";
+
+        if (move.San is { } san)
+        {
+            foreach (var piece in "QRBN")
+            {
+                if (san.Contains($"={piece}", StringComparison.Ordinal))
+                    return text + char.ToLowerInvariant(piece);
+            }
+        }
+
+        return text;
+    }
+
     public BoardTheme Theme
     {
         get => _theme;
@@ -320,7 +370,7 @@ public sealed partial class ChessBoardView : UserControl
         if (point.Properties.IsRightButtonPressed)
             return;
 
-        if (Board.IsEndGame || !TryHitSquare(point.Position, out var square))
+        if (Board.IsEndGame || !HumanToMove || !TryHitSquare(point.Position, out var square))
             return;
 
         // If a piece is already selected and this square completes a legal move, play it.
@@ -451,6 +501,17 @@ public sealed partial class ChessBoardView : UserControl
         ClearSelection();
         Render();
         BoardChanged?.Invoke(this, EventArgs.Empty);
+        RaiseIfOpponentToMove();
+    }
+
+    /// <summary>
+    /// Ask the host for a move when it is the opponent's turn. Deliberately raised after
+    /// BoardChanged so clocks and status have already been updated for the new position.
+    /// </summary>
+    private void RaiseIfOpponentToMove()
+    {
+        if (HumanColor is not null && !Board.IsEndGame && Board.Turn != HumanColor)
+            OpponentToMove?.Invoke(this, EventArgs.Empty);
     }
 
     /// <summary>

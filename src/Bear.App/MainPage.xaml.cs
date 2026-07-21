@@ -1,3 +1,5 @@
+using Bear.App.Controls;
+using Bear.App.Maia;
 using Bear.App.Theming;
 using Chess;
 using Microsoft.UI.Xaml;
@@ -32,10 +34,12 @@ public sealed partial class MainPage : Page
 
         _ticker.Tick += OnTick;
         BoardView.GameEnding += OnGameEnding;
+        BoardView.OpponentToMove += OnOpponentToMove;
         AddAppMenuItems();
         RestorePalette();
         UpdateClockText();
         UpdateStatus();
+        StartGame();
     }
 
     // --- settings --------------------------------------------------------
@@ -114,7 +118,7 @@ public sealed partial class MainPage : Page
             item.Click += (_, _) =>
             {
                 _opponentStrength = value;
-                OpponentText.Text = $"Opponent {value}";
+                UpdateOpponentText();
             };
             strength.Items.Add(item);
         }
@@ -132,10 +136,12 @@ public sealed partial class MainPage : Page
                     GroupName = "TimeControl",
                     IsChecked = minutes == 10 && incrementSeconds == 0,
                 };
+                var speedOfGroup = SpeedOf(speed);
                 item.Click += (_, _) =>
                 {
                     _baseTime = TimeSpan.FromMinutes(minutes);
                     _increment = TimeSpan.FromSeconds(incrementSeconds);
+                    _speed = speedOfGroup;
                     ResetClocks();
                 };
                 group.Items.Add(item);
@@ -156,11 +162,118 @@ public sealed partial class MainPage : Page
     /// not offered — that rules out 1+0 (60s, Bullet) and 30+0 (1800s, Classical), both of
     /// which this menu used to list.
     /// </summary>
+    private static MaiaSpeed SpeedOf(string label) =>
+        label == "Blitz" ? MaiaSpeed.Blitz : MaiaSpeed.Rapid;
+
     private static (string Speed, (string Label, int Minutes, int Increment)[] Controls)[] TimeControls() =>
     [
         ("Blitz", [("3 + 0", 3, 0), ("3 + 2", 3, 2), ("5 + 0", 5, 0), ("5 + 3", 5, 3)]),
         ("Rapid", [("10 + 0", 10, 0), ("10 + 5", 10, 5), ("15 + 10", 15, 10), ("20 + 0", 20, 0)]),
     ];
+
+    // --- the opponent ----------------------------------------------------
+
+    private MaiaEngine? _maia;
+    private MaiaSpeed _speed = MaiaSpeed.Rapid;
+    private bool _thinking;
+
+    /// <summary>
+    /// Load the model for the current time control, reusing the one already open when the
+    /// speed has not changed. Loading is a second or two for 89 MB, so it is not something
+    /// to do per move.
+    /// </summary>
+    private void EnsureEngine()
+    {
+        if (_maia is not null && _loadedSpeed == _speed)
+            return;
+
+        _maia?.Dispose();
+        _maia = MaiaEngine.TryLoad(_speed);
+        _loadedSpeed = _speed;
+    }
+
+    private MaiaSpeed? _loadedSpeed;
+
+    /// <summary>
+    /// Start a game with the player on a random side, and flip the board so they are
+    /// always looking up it. If no model is embedded there is no opponent, and the board
+    /// stays open to both sides rather than freezing.
+    /// </summary>
+    private void StartGame()
+    {
+        EnsureEngine();
+
+        if (_maia is null)
+        {
+            BoardView.HumanColor = null;
+            return;
+        }
+
+        var playsWhite = Random.Shared.Next(2) == 0;
+        BoardView.HumanColor = playsWhite ? PieceColor.White : PieceColor.Black;
+
+        if (BoardView.Flipped == playsWhite)
+            BoardView.Flip();
+
+        UpdateOpponentText();
+
+        // Black to play means Maia opens, and nothing has moved to trigger that yet.
+        if (!playsWhite)
+            _ = MakeOpponentMoveAsync();
+    }
+
+    private void OnOpponentToMove(object? sender, EventArgs e) => _ = MakeOpponentMoveAsync();
+
+    /// <summary>
+    /// Maia's move: one forward pass, off the UI thread, played back on it.
+    ///
+    /// There is no artificial delay. Maia does not search, so its answer after ten seconds
+    /// is its answer after four milliseconds, and stalling would be theatre.
+    /// </summary>
+    private async Task MakeOpponentMoveAsync()
+    {
+        if (_maia is null || _thinking || BoardView.Board.IsEndGame)
+            return;
+
+        if (BoardView.HumanColor is null || BoardView.Board.Turn == BoardView.HumanColor)
+            return;
+
+        _thinking = true;
+        try
+        {
+            var fen = BoardView.Board.ToFen();
+            var legal = BoardView.Board.Moves().Select(ChessBoardView.Uci).ToArray();
+            if (legal.Length == 0)
+                return;
+
+            var engine = _maia;
+            var elo = _opponentStrength;
+            var uci = await Task.Run(() => engine.Play(fen, legal, elo));
+
+            if (!BoardView.PlayUci(uci))
+            {
+                // The board is the authority on legality. If a move ever fails to match,
+                // play something legal rather than stalling the game forever.
+                BoardView.PlayUci(legal[0]);
+            }
+        }
+        catch
+        {
+            // A failed evaluation must not wedge the game.
+        }
+        finally
+        {
+            _thinking = false;
+        }
+    }
+
+    private void UpdateOpponentText()
+    {
+        var side = BoardView.HumanColor is null
+            ? string.Empty
+            : BoardView.HumanColor == PieceColor.White ? " — you are White" : " — you are Black";
+        OpponentText.Text = $"Opponent {_opponentStrength}{side}";
+    }
 
     // --- the game log ----------------------------------------------------
 
@@ -214,8 +327,8 @@ public sealed partial class MainPage : Page
                 .SkipWhile(l => l.TrimStart().StartsWith('[') || l.Length == 0))
             .Trim();
 
-        // TODO(M5): colour is randomised per game, so this pairing becomes dynamic.
         var opponent = $"Maia {_opponentStrength}";
+        var humanIsWhite = BoardView.HumanColor != PieceColor.Black;
 
         var tags = new (string Key, string Value)[]
         {
@@ -223,8 +336,8 @@ public sealed partial class MainPage : Page
             ("Site", "Bear"),
             ("Date", DateTime.Now.ToString("yyyy.MM.dd")),
             ("Round", "-"),
-            ("White", "Player"),
-            ("Black", opponent),
+            ("White", humanIsWhite ? "Player" : opponent),
+            ("Black", humanIsWhite ? opponent : "Player"),
             ("Result", ResultTag()),
             // Seconds-plus-increment, per the PGN spec. This is the tag that makes an
             // exported game reconstructible: it fixes the category, and with it which
@@ -232,7 +345,7 @@ public sealed partial class MainPage : Page
             ("TimeControl", $"{(int)_baseTime.TotalSeconds}+{(int)_increment.TotalSeconds}"),
             // Only Maia's side carries a rating. Bear does not track the player's, and
             // omitting it is more honest than inventing one.
-            ("BlackElo", _opponentStrength.ToString()),
+            (humanIsWhite ? "BlackElo" : "WhiteElo", _opponentStrength.ToString()),
         };
 
         var header = string.Join(
@@ -338,7 +451,11 @@ public sealed partial class MainPage : Page
 
     // --- board events ----------------------------------------------------
 
-    private void OnGameReset(object sender, EventArgs e) => ResetClocks();
+    private void OnGameReset(object sender, EventArgs e)
+    {
+        ResetClocks();
+        StartGame();
+    }
 
     private void OnBoardChanged(object sender, EventArgs e)
     {
