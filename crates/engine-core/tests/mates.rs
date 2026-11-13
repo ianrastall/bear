@@ -1,4 +1,8 @@
-//! Forced mates that the search must find at the shallowest depth that can see them.
+//! Forced mates that the search must find at a fixed depth.
+//!
+//! A search that prunes does not see a mate at the first depth that reaches it, so the
+//! depth allows some plies beyond the mate. What it reports must be a mate, and never
+//! a shorter one than exists.
 
 use std::sync::atomic::AtomicBool;
 
@@ -10,8 +14,11 @@ use bear_core::tt::TranspositionTable;
 
 const SUITE: &str = include_str!("mates.epd");
 
+/// Plies searched beyond the mating move.
+const EXTRA_PLIES: i32 = 6;
+
 /// Searches every position of the suite with a mate in at most `longest` moves to
-/// depth 2k - 1, where the mating move is the last ply, and returns how many it tried.
+/// depth 2k - 1 + EXTRA_PLIES and returns how many it tried.
 fn solve(longest: i32) -> usize {
     let stop = AtomicBool::new(false);
     let tt = TranspositionTable::new(16);
@@ -38,8 +45,16 @@ fn solve(longest: i32) -> usize {
         let mut td = ThreadData::new(Hce);
         td.set_position(&pos, &ci, &[]);
         tt.clear();
-        let outcome = td.search(shared, &Limits::depth(2 * moves - 1), 0, |_| {});
-        assert_eq!(mate_in(outcome.score), Some(moves), "{line}");
+        let depth = 2 * moves - 1 + EXTRA_PLIES;
+        let outcome = td.search(shared, &Limits::depth(depth), 0, |_| {});
+        let found = mate_in(outcome.score);
+        if std::env::var_os("BEAR_MATES_VERBOSE").is_some() {
+            println!("{found:?} at depth {depth}: {line}");
+        }
+        assert!(
+            found.is_some_and(|m| m >= moves),
+            "{line}: found {found:?} at depth {depth}"
+        );
         tried += 1;
     }
     tried

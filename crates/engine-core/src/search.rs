@@ -22,6 +22,11 @@ pub const MATE: i32 = 32_000;
 pub const MATE_BOUND: i32 = MATE - MAX_PLY as i32;
 const INFINITY: i32 = MATE + 1;
 
+/// Reverse futility pruning applies up to this depth.
+const RFP_MAX_DEPTH: i32 = 8;
+/// How far above beta the evaluation must be, per ply of remaining depth.
+const RFP_MARGIN: i32 = 75;
+
 /// What a search shares with other threads, borrowed for the length of one `go`.
 #[derive(Copy, Clone)]
 pub struct Shared<'a> {
@@ -99,6 +104,8 @@ pub struct ThreadData<E: Evaluator> {
     pv: Box<[PvLine]>,
     /// For each ply, the last two quiet moves that caused a cutoff there.
     killers: Box<[Refutations]>,
+    /// The static evaluation at each ply of the current line, or `NO_EVAL` in check.
+    evals: Box<[i32]>,
     /// Keys of every position from the start of the game to the current node.
     keys: Vec<u64>,
     castling: CastlingInfo,
@@ -113,6 +120,7 @@ impl<E: Evaluator> ThreadData<E> {
             positions: vec![start; MAX_PLY + 1].into_boxed_slice(),
             pv: vec![PvLine::EMPTY; MAX_PLY + 2].into_boxed_slice(),
             killers: vec![[None; 2]; MAX_PLY + 1].into_boxed_slice(),
+            evals: vec![NO_EVAL; MAX_PLY + 1].into_boxed_slice(),
             keys,
             castling,
         }
@@ -374,9 +382,16 @@ impl<E: Evaluator> Worker<'_, E> {
 
         let key = self.td.positions[ply].key();
         let halfmove = self.td.positions[ply].state().halfmove;
+        let in_check = self.td.positions[ply].in_check();
         let mut tt_move = None;
-        if let Some(entry) = self.shared.tt.probe(key) {
+        let mut static_eval = NO_EVAL;
+        // The static evaluation, replaced by a table score that is known to be
+        // nearer the truth on the side that matters.
+        let mut eval = NO_EVAL;
+        let entry = self.shared.tt.probe(key);
+        if let Some(entry) = entry {
             tt_move = entry.mv;
+            static_eval = entry.eval;
             let score = from_tt(entry.score, ply, halfmove);
             // Near the fifty-move limit the stored score may rest on lines that the
             // rule now cuts short.
@@ -386,6 +401,53 @@ impl<E: Evaluator> Worker<'_, E> {
                 && entry.bound.cuts(score, alpha, beta)
             {
                 return score;
+            }
+        }
+        if in_check {
+            static_eval = NO_EVAL;
+        } else {
+            if static_eval == NO_EVAL {
+                static_eval = self.td.eval.evaluate(&self.td.positions[ply]);
+            }
+            eval = static_eval;
+            if let Some(entry) = entry {
+                let score = from_tt(entry.score, ply, halfmove);
+                let nearer = match entry.bound {
+                    Bound::Lower => score > eval,
+                    Bound::Upper => score < eval,
+                    Bound::Exact => true,
+                    Bound::None => false,
+                };
+                if nearer {
+                    eval = score;
+                }
+            }
+        }
+        self.td.evals[ply] = static_eval;
+        // Whether the side to move stands better than it did two plies ago; when it
+        // was in check then, four plies ago.
+        let improving = !in_check && {
+            let before = |plies: usize| {
+                (ply >= plies)
+                    .then(|| self.td.evals[ply - plies])
+                    .filter(|&earlier| earlier != NO_EVAL)
+            };
+            before(2)
+                .or_else(|| before(4))
+                .is_none_or(|earlier| static_eval > earlier)
+        };
+
+        // Pruning of the whole node, for positions that are not on the principal
+        // variation and not in check.
+        if !is_pv && !in_check {
+            // Reverse futility: so far above beta that a shallow search will not
+            // bring it back below.
+            if depth <= RFP_MAX_DEPTH
+                && eval - RFP_MARGIN * (depth - improving as i32) >= beta
+                && eval < MATE_BOUND
+                && beta > -MATE_BOUND
+            {
+                return (eval + beta) / 2;
             }
         }
 
@@ -467,7 +529,7 @@ impl<E: Evaluator> Worker<'_, E> {
             TtEntry {
                 mv: best_move,
                 score: to_tt(best, ply),
-                eval: NO_EVAL,
+                eval: static_eval,
                 depth,
                 bound,
                 pv: is_pv,
