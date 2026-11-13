@@ -11,6 +11,7 @@ usage:
   cargo xtask sprt --base <revision or engine file> [options]
 
 options:
+  --new <engine file>  play this engine instead of building the working tree
   --bounds <name>      early = [0, 10] (default), standard = [0, 5], late = [0, 3],
                        regress = [-5, 0]
   --tc <time control>  default 8+0.08
@@ -26,6 +27,7 @@ const BOOK: &str = "books/bear-8ply.epd";
 
 struct Options {
     base: String,
+    new: Option<String>,
     elo: (i32, i32),
     tc: String,
     concurrency: usize,
@@ -38,6 +40,7 @@ fn parse(args: &[String]) -> Result<Options, String> {
         std::thread::available_parallelism().map_or(1, |n| (n.get() / 2).saturating_sub(1).max(1));
     let mut options = Options {
         base: String::new(),
+        new: None,
         elo: (0, 10),
         tc: "8+0.08".to_string(),
         concurrency: default_concurrency,
@@ -51,6 +54,7 @@ fn parse(args: &[String]) -> Result<Options, String> {
             .ok_or_else(|| format!("{arg} needs a value\n\n{USAGE}"))?;
         match arg.as_str() {
             "--base" => options.base = value.clone(),
+            "--new" => options.new = Some(value.clone()),
             "--bounds" => {
                 options.elo = match value.as_str() {
                     "early" => (0, 10),
@@ -197,11 +201,17 @@ fn sprt(args: &[String]) -> Result<ExitCode, String> {
         .canonicalize()
         .map_err(|e| format!("cannot resolve {}: {e}", options.out.display()))?;
 
-    let new = build_new(root, &out)?;
-    let base = if Path::new(&options.base).is_file() {
-        PathBuf::from(&options.base)
+    let existing = |file: &str| {
+        PathBuf::from(file)
             .canonicalize()
-            .map_err(|e| format!("cannot resolve {}: {e}", options.base))?
+            .map_err(|e| format!("cannot resolve {file}: {e}"))
+    };
+    let new = match &options.new {
+        Some(file) => existing(file)?,
+        None => build_new(root, &out)?,
+    };
+    let base = if Path::new(&options.base).is_file() {
+        existing(&options.base)?
     } else {
         build_base(root, &out, &options.base)?
     };
