@@ -1,5 +1,6 @@
 //! Generates data from Bear's own play. For now that is opening positions for test
-//! matches; self-play training data is added with the neural network.
+//! matches and mate positions for the search tests; self-play training data is added
+//! with the neural network.
 
 #![forbid(unsafe_code)]
 
@@ -10,7 +11,7 @@ use std::sync::atomic::AtomicBool;
 
 use bear_core::eval::Hce;
 use bear_core::movegen::{MoveList, gen_legal};
-use bear_core::search::{Shared, ThreadData};
+use bear_core::search::{Shared, ThreadData, mate_in};
 use bear_core::time::Limits;
 use bear_core::tt::TranspositionTable;
 use bear_core::{CastlingInfo, Position};
@@ -22,7 +23,14 @@ usage:
 Writes N distinct positions (default 2000), one FEN per line. Each is reached by P
 random legal moves from the starting position (default 8) and kept only if neither
 side is in check and a depth-D search (default 5) scores it within C centipawns of
-level (default 60).";
+level (default 60).
+
+  datagen mates --out <file> [--count N] [--max-mate M] [--plies P] [--seed S]
+
+Writes N distinct positions (default 30) in which the side to move can force mate in
+2 to M moves (default 4), as `FEN; mate in k`, shortest first. They come from games
+of shallow searches and occasional random moves, one position from each game; the
+mate distance is what a search to depth 2M-1 reports.";
 
 /// The search keeps a move list in every stack frame and quiescence can run deep.
 const WORKER_STACK: usize = 16 << 20;
@@ -34,6 +42,7 @@ struct Options {
     seed: u64,
     depth: i32,
     max_cp: i32,
+    max_mate: i32,
 }
 
 fn parse_options(args: &[String]) -> Result<Options, String> {
@@ -44,6 +53,7 @@ fn parse_options(args: &[String]) -> Result<Options, String> {
         seed: 1,
         depth: 5,
         max_cp: 60,
+        max_mate: 4,
     };
     let mut args = args.iter();
     while let Some(arg) = args.next() {
@@ -59,11 +69,12 @@ fn parse_options(args: &[String]) -> Result<Options, String> {
             "--seed" => options.seed = number(value()?)?,
             "--depth" => options.depth = number(value()?)?.clamp(1, 64) as i32,
             "--max-cp" => options.max_cp = number(value()?)?.min(10_000) as i32,
+            "--max-mate" => options.max_mate = number(value()?)?.clamp(2, 8) as i32,
             other => return Err(format!("unknown option {other}\n\n{USAGE}")),
         }
     }
     if options.out.is_empty() {
-        return Err(format!("openings needs --out <file>\n\n{USAGE}"));
+        return Err(format!("--out <file> is required\n\n{USAGE}"));
     }
     Ok(options)
 }
@@ -142,16 +153,103 @@ fn openings(options: &Options) -> Result<(), String> {
     Ok(())
 }
 
+/// Plays games that end quickly and collects positions with a short forced mate.
+fn mates(options: &Options) -> Result<(), String> {
+    let mut rng = Rng(options.seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1);
+    let stop = AtomicBool::new(false);
+    let tt = TranspositionTable::new(TranspositionTable::DEFAULT_MB);
+    let shared = Shared {
+        stop: &stop,
+        tt: &tt,
+    };
+    let shallow = Limits::depth(3);
+    let deep = Limits::depth(2 * options.max_mate - 1);
+    let mut thread = ThreadData::new(Hce);
+
+    // The same number of positions for each mate distance, as far as it divides.
+    let distances = (options.max_mate - 1) as usize;
+    let quota = options.count.div_ceil(distances);
+    let mut found: Vec<Vec<String>> = vec![Vec::new(); distances];
+    let mut seen = HashSet::new();
+    let mut total = 0;
+    let mut games = 0u64;
+
+    while total < options.count {
+        games += 1;
+        if games > 200 * options.count as u64 + 1000 {
+            return Err(format!("only {total} positions found in {games} games"));
+        }
+        let Some((mut pos, ci, mut history)) = random_opening(&mut rng, options.plies) else {
+            continue;
+        };
+        for _ in 0..300 {
+            let mut legal = MoveList::new();
+            gen_legal(&pos, &ci, &mut legal);
+            if legal.is_empty() || pos.state().halfmove >= 100 {
+                break;
+            }
+            thread.set_position(&pos, &ci, &history);
+            let quick = thread.search(shared, &shallow, 0, |_| {});
+
+            // Only a clearly winning side is worth the deeper look.
+            if quick.score >= 500 && !seen.contains(&pos.key()) {
+                tt.clear();
+                let outcome = thread.search(shared, &deep, 0, |_| {});
+                if let Some(moves) = mate_in(outcome.score)
+                    && (2..=options.max_mate).contains(&moves)
+                {
+                    let slot = &mut found[moves as usize - 2];
+                    if slot.len() < quota && total < options.count {
+                        seen.insert(pos.key());
+                        slot.push(format!("{}; mate in {moves}", pos.fen(&ci)));
+                        total += 1;
+                        // One position from each game, so that they differ.
+                        break;
+                    }
+                }
+            }
+
+            // Mostly the shallow search's choice, sometimes anything at all, so that
+            // games are decided early and differ from one another.
+            let pick = match quick.best {
+                Some(best) if !rng.next().is_multiple_of(5) => best,
+                _ => legal.as_slice()[(rng.next() % legal.len() as u64) as usize].mv,
+            };
+            history.push(pos.key());
+            pos = pos.make(pick, &ci);
+        }
+    }
+
+    let mut text = String::new();
+    for line in found.iter().flatten() {
+        writeln!(text, "{line}").unwrap();
+    }
+    std::fs::write(&options.out, text).map_err(|e| format!("cannot write {}: {e}", options.out))?;
+    println!("wrote {total} positions to {} ({games} games)", options.out);
+    Ok(())
+}
+
+/// Runs `task` on a thread with a stack large enough for the search.
+fn on_worker(options: Options, task: fn(&Options) -> Result<(), String>) -> Result<(), String> {
+    std::thread::Builder::new()
+        .stack_size(WORKER_STACK)
+        .spawn(move || task(&options))
+        .map_err(|e| format!("cannot start the worker thread: {e}"))?
+        .join()
+        .unwrap_or_else(|_| Err("the worker thread panicked".to_string()))
+}
+
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let result = match args.first().map(String::as_str) {
-        Some("openings") => parse_options(&args[1..]).and_then(|options| {
-            std::thread::Builder::new()
-                .stack_size(WORKER_STACK)
-                .spawn(move || openings(&options))
-                .map_err(|e| format!("cannot start the worker thread: {e}"))?
-                .join()
-                .unwrap_or_else(|_| Err("the worker thread panicked".to_string()))
+        Some("openings") => {
+            parse_options(&args[1..]).and_then(|options| on_worker(options, openings))
+        }
+        Some("mates") => parse_options(&args[1..]).and_then(|mut options| {
+            if !args.iter().any(|arg| arg == "--count") {
+                options.count = 30;
+            }
+            on_worker(options, mates)
         }),
         _ => Err(USAGE.to_string()),
     };

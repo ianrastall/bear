@@ -27,6 +27,8 @@ jobs:
         run: cargo test --workspace
       - name: Release build
         run: cargo build --release
+      - name: Mate suite
+        run: cargo test --release -p bear-core --test mates
       - name: Perft suites
         run: |
           cargo run --release -p perft -- suite crates/perft/suites/standard.epd

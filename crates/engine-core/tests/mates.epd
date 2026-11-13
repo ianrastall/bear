@@ -1,0 +1,40 @@
+# Forced mates: position; mate in k moves for the side to move.
+# Made by `datagen mates --count 36 --seed 2026` from Bear's own games at milestone M3.
+# Stockfish 18 reports the same distance for every line when asked with `go mate k`.
+
+2kr1bnr/5pp1/2p1p2p/p1P5/8/BP3P2/P1q3PP/K4R2 b - - 1 23; mate in 2
+8/4k3/2p2p1p/Q2b1P2/4p1P1/2P3P1/8/R5K1 w - - 3 50; mate in 2
+2r2rk1/6p1/2p1n3/5p2/p7/4K3/8/1q1b4 b - - 1 52; mate in 2
+r1bq2kr/ppp1b1p1/3p2B1/4N2p/1nP4P/4P3/PP1P2P1/RNBQ1RK1 w - - 0 13; mate in 2
+r1bq1k1r/1p6/p2b4/2pNn2P/P7/B3PB2/3P1P2/R2Q2RK b - - 8 27; mate in 2
+8/8/1k6/1p1p4/3P4/K7/3q4/8 b - - 1 62; mate in 2
+8/4k2p/K5p1/8/8/2q5/8/3q4 b - - 1 69; mate in 2
+8/1pN2Pk1/n3Q3/7p/p6P/B1P5/P3P2P/R3KB1b w Q - 1 28; mate in 2
+6k1/2p5/2P1p3/p2p3p/P2q2B1/5KP1/4P3/3r4 b - - 1 37; mate in 2
+8/8/3p2kp/8/1P2q3/b1p5/8/3K4 b - - 0 48; mate in 2
+4k3/8/1R1Rp3/pP2Pp2/P4Pp1/2K3Pp/7P/8 w - - 3 43; mate in 2
+r7/p2kn2p/3b2p1/p7/7P/1r6/6K1/3q4 b - - 1 39; mate in 2
+QQ6/5k2/8/8/6b1/1K6/8/7b w - - 1 63; mate in 3
+2R5/1R2P1k1/5p2/p4r1p/4N3/3p2P1/5P2/6K1 w - - 1 51; mate in 3
+8/5k2/1p2p3/4K2p/8/8/1r3rp1/8 b - - 3 57; mate in 3
+3R2Q1/1R6/3b4/5k2/8/1P5P/2RP1K2/8 w - - 1 56; mate in 3
+1k6/4B3/8/p1P5/N2N4/1P6/PP2K1BP/R4R2 w - - 3 40; mate in 3
+2b3k1/7p/2p5/3p2p1/5p2/2q2P2/2P5/5K2 b - - 1 42; mate in 3
+4r3/8/8/8/1k6/2pr4/4n3/5K2 b - - 3 59; mate in 3
+2b5/5p1k/3p1npP/p4P1p/3PP2P/3PqNK1/1rp5/8 b - - 0 35; mate in 3
+5r2/3p2R1/5p1R/p1p2k2/q7/2B5/1K1P3P/4r3 b - - 11 43; mate in 3
+4k1r1/2r3pp/p7/5p2/1Pq1P1n1/8/1K4PP/7R b - - 1 28; mate in 3
+8/8/8/8/8/3kq3/6K1/8 b - - 5 86; mate in 3
+r1k5/1p4pp/8/8/p2b1nPP/8/5r2/2B3K1 b - - 3 36; mate in 3
+r7/p3k2p/1p3b2/1PP2p2/5p2/2r5/1K6/3b4 b - - 1 38; mate in 4
+8/5p2/8/4k3/4br2/7p/2pK3P/8 b - - 1 67; mate in 4
+1k6/p6Q/7p/2p3n1/PPNPP2p/4B3/1P3K2/r7 w - - 3 31; mate in 4
+6b1/7P/6k1/R7/8/2P5/3K4/8 w - - 0 62; mate in 4
+8/p3p3/3k4/P7/5P2/4q3/3pB1KP/8 b - - 1 44; mate in 4
+8/8/8/k7/2Q1K3/8/8/8 w - - 11 103; mate in 4
+r1b4r/1p1pk1pp/1P6/p2Q4/P1B1P3/2B5/R4PPP/4K2R w K - 3 26; mate in 4
+2kr1r2/2p2B2/p5p1/1p1P4/1bP1pR2/1P2P1p1/P3q1P1/1K1R4 b - - 5 29; mate in 4
+3k1r2/1P2R3/N1nP1p2/p2R3p/P7/1P4PP/5P2/5K2 w - - 3 42; mate in 4
+2rr2k1/8/1b1q3p/5p2/1P2pP2/2n3PR/4Q3/R3K3 b - - 0 37; mate in 4
+8/6pk/1K6/1p3p1p/8/2B3P1/5P2/q1r5 b - - 1 49; mate in 4
+r7/p1r1k3/2p4B/P3PR2/3Pp1Q1/2P3P1/1P5P/1R4K1 w - - 1 31; mate in 4

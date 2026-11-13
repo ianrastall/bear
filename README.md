@@ -38,6 +38,7 @@ Arguments are run as one command, so `bear bench` prints the benchmark and exits
 cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
+cargo test --release -p bear-core --test mates
 cargo run --release -p perft -- suite crates/perft/suites/standard.epd
 cargo run --release -p perft -- suite crates/perft/suites/extended.epd
 cargo run --release -p bear-uci -- bench
@@ -53,11 +54,17 @@ perft divide <depth> [fen]          the count below each legal move
 perft suite <file> [--max-depth N]  check every line of an EPD file
 perft fuzz --oracle <engine> [--positions N] [--depth D] [--seed S] [--chess960]
 datagen openings --out <file> [--count N] [--plies P] [--seed S] [--depth D] [--max-cp C]
+datagen mates --out <file> [--count N] [--max-mate M] [--plies P] [--seed S]
+cargo xtask sprt --base <revision or engine file> [--new <engine file>] [--bounds <name>]
 ```
 
 `perft fuzz` plays random games and compares the per-move counts of every position with another UCI engine's `go perft` output. The other engine is only run as a separate program.
 
 `datagen openings` writes balanced random opening positions for test matches. `books/bear-8ply.epd` was made with `--count 2000 --seed 2026`.
+
+`datagen mates` collects positions with a short forced mate from Bear's own games. `crates/engine-core/tests/mates.epd` holds 36 of them; the release-mode test searches each to the shallowest depth that can see the mate.
+
+`cargo xtask sprt` plays the working tree (or `--new`) against an earlier revision with fastchess until a sequential probability ratio test accepts or rejects the change. fastchess is found through `--fastchess`, the `FASTCHESS` environment variable or the path.
 
 ## Layout
 
