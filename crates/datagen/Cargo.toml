@@ -1,0 +1,16 @@
+[package]
+name = "datagen"
+description = "Data generation for the Bear chess engine: opening sets now, training data later"
+publish = false
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+bear-core = { path = "../engine-core" }
+
+[lints]
+workspace = true

@@ -1,7 +1,7 @@
 //! Core of the Bear chess engine.
 //!
-//! This crate holds the board representation, attack tables, move generation and perft,
-//! and will hold the search. See `docs/architecture.md` for the design.
+//! This crate holds the board representation, attack tables, move generation, perft,
+//! evaluation and the search. See `docs/architecture.md` for the design.
 //!
 //! `unsafe` is denied crate-wide and allowed only at the sites listed in the
 //! architecture document, each with a `SAFETY` comment.
@@ -12,11 +12,14 @@ pub mod attacks;
 pub mod bitboard;
 pub mod castling;
 pub mod chess_move;
+pub mod eval;
 pub mod movegen;
 pub mod perft;
 pub mod piece;
 pub mod position;
+pub mod search;
 pub mod square;
+pub mod time;
 pub mod zobrist;
 
 pub use bitboard::Bitboard;

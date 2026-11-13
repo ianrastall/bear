@@ -9,6 +9,16 @@ version = "0.1.0"
 [[package]]
 name = "bear-uci"
 version = "0.1.0"
+dependencies = [
+ "bear-core",
+]
+
+[[package]]
+name = "datagen"
+version = "0.1.0"
+dependencies = [
+ "bear-core",
+]
 
 [[package]]
 name = "perft"

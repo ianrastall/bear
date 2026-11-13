@@ -12,5 +12,8 @@ repository.workspace = true
 name = "bear"
 path = "src/main.rs"
 
+[dependencies]
+bear-core = { path = "../engine-core" }
+
 [lints]
 workspace = true

@@ -471,6 +471,24 @@ impl Position {
     }
 }
 
+/// A text diagram of the board with the eighth rank at the top.
+impl core::fmt::Display for Position {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        for rank in (0..8u8).rev() {
+            write!(f, "{} ", rank + 1)?;
+            for file in 0..8u8 {
+                let c = match self.piece_on(Square::from_file_rank(file, rank)) {
+                    Some(piece) => piece.to_char(),
+                    None => '.',
+                };
+                write!(f, " {c}")?;
+            }
+            writeln!(f)?;
+        }
+        write!(f, "   a b c d e f g h")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

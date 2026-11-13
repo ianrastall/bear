@@ -181,6 +181,18 @@ pub fn gen_legal(pos: &Position, ci: &CastlingInfo, list: &mut MoveList) {
     }
 }
 
+/// The legal move written as `text` in UCI notation, if there is one.
+///
+/// Castling is accepted both as the king's two-square move (`e1g1`) and as king takes
+/// rook (`e1h1`), whichever variant is being played.
+pub fn find_uci_move(pos: &Position, ci: &CastlingInfo, text: &str) -> Option<Move> {
+    let mut legal = MoveList::new();
+    gen_legal(pos, ci, &mut legal);
+    legal.iter().find(|mv| {
+        mv.uci(false).to_string() == text || (mv.is_castle() && mv.uci(true).to_string() == text)
+    })
+}
+
 #[inline]
 fn push_moves(list: &mut MoveList, from: Square, targets: Bitboard, theirs: Bitboard) {
     for to in targets & theirs {

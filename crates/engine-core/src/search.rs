@@ -1,0 +1,752 @@
+//! The search: iterative deepening over a fail-soft alpha-beta with a quiescence
+//! search at the leaves.
+//!
+//! [`ThreadData`] holds what one search thread keeps between searches. A search borrows
+//! it together with the [`Shared`] state for the duration of one `go`.
+
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::{Duration, Instant};
+
+use crate::eval::Evaluator;
+use crate::movegen::{MoveList, ScoredMove, gen_all, gen_evasions, gen_noisy};
+use crate::time::{Limits, TimeBudget};
+use crate::{CastlingInfo, Move, PieceType, Position};
+
+/// Deepest ply the search can reach.
+pub const MAX_PLY: usize = 240;
+/// Score of delivering mate on the spot; mate in `n` plies scores `MATE - n`.
+pub const MATE: i32 = 32_000;
+/// Scores beyond this magnitude are mate scores.
+pub const MATE_BOUND: i32 = MATE - MAX_PLY as i32;
+const INFINITY: i32 = MATE + 1;
+
+/// State shared by every search thread and by the thread reading commands.
+#[derive(Default, Debug)]
+pub struct Shared {
+    /// Set to make a running search return as soon as it can.
+    pub stop: AtomicBool,
+}
+
+/// What the search knows after completing an iteration.
+#[derive(Debug)]
+pub struct Report<'a> {
+    pub depth: i32,
+    /// Deepest ply reached, including quiescence.
+    pub seldepth: usize,
+    /// Score for the side to move at the root.
+    pub score: i32,
+    pub nodes: u64,
+    pub elapsed: Duration,
+    /// The principal variation, starting with the best move.
+    pub pv: &'a [Move],
+}
+
+/// The final result of a search.
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+pub struct Outcome {
+    /// `None` when the side to move has no legal move.
+    pub best: Option<Move>,
+    /// The move expected in reply, when the search saw that far.
+    pub ponder: Option<Move>,
+    pub score: i32,
+    /// Last depth searched to completion.
+    pub depth: i32,
+    pub nodes: u64,
+}
+
+/// Moves to mate (positive when the side to move mates) if `score` is a mate score.
+pub fn mate_in(score: i32) -> Option<i32> {
+    if score > MATE_BOUND {
+        Some((MATE - score + 1) / 2)
+    } else if score < -MATE_BOUND {
+        Some(-(MATE + score) / 2)
+    } else {
+        None
+    }
+}
+
+#[derive(Clone)]
+struct PvLine {
+    len: usize,
+    moves: [Option<Move>; MAX_PLY],
+}
+
+impl PvLine {
+    const EMPTY: PvLine = PvLine {
+        len: 0,
+        moves: [None; MAX_PLY],
+    };
+
+    /// Becomes `first` followed by `rest`.
+    fn set(&mut self, first: Move, rest: &PvLine) {
+        let n = rest.len.min(MAX_PLY - 1);
+        self.moves[0] = Some(first);
+        self.moves[1..=n].copy_from_slice(&rest.moves[..n]);
+        self.len = n + 1;
+    }
+}
+
+/// Everything one search thread owns across searches.
+pub struct ThreadData<E: Evaluator> {
+    eval: E,
+    /// The position at each ply of the current line; index 0 is the root.
+    positions: Box<[Position]>,
+    pv: Box<[PvLine]>,
+    /// Keys of every position from the start of the game to the current node.
+    keys: Vec<u64>,
+    castling: CastlingInfo,
+}
+
+impl<E: Evaluator> ThreadData<E> {
+    pub fn new(eval: E) -> ThreadData<E> {
+        let (start, castling) = Position::startpos();
+        let keys = vec![start.key()];
+        ThreadData {
+            eval,
+            positions: vec![start; MAX_PLY + 1].into_boxed_slice(),
+            pv: vec![PvLine::EMPTY; MAX_PLY + 2].into_boxed_slice(),
+            keys,
+            castling,
+        }
+    }
+
+    /// Sets the position to search. `history` holds the keys of every earlier position
+    /// in the game, oldest first, and is what repetition detection looks back through.
+    pub fn set_position(&mut self, root: &Position, castling: &CastlingInfo, history: &[u64]) {
+        self.positions[0].clone_from(root);
+        self.castling.clone_from(castling);
+        self.keys.clear();
+        self.keys.extend_from_slice(history);
+        self.keys.push(root.key());
+    }
+
+    /// The static evaluation of the position set by [`set_position`](Self::set_position).
+    pub fn evaluate_root(&mut self) -> i32 {
+        self.eval.evaluate(&self.positions[0])
+    }
+
+    /// Searches the current position within `limits`, calling `on_iteration` after each
+    /// completed depth. `overhead_ms` is kept back from the clock.
+    pub fn search(
+        &mut self,
+        shared: &Shared,
+        limits: &Limits,
+        overhead_ms: u64,
+        mut on_iteration: impl FnMut(&Report),
+    ) -> Outcome {
+        let start = Instant::now();
+        let stm = self.positions[0].stm();
+        let budget = TimeBudget::new(limits, stm, overhead_ms);
+        // Room for the deepest line plus this search's own pushes.
+        self.keys.reserve(MAX_PLY + 1);
+
+        let mut worker = Worker {
+            td: self,
+            shared,
+            start,
+            hard: budget.hard,
+            node_limit: limits.nodes,
+            nodes: 0,
+            seldepth: 0,
+            stopped: false,
+            can_stop: false,
+            root_best: None,
+        };
+
+        let root_moves = worker.legal_root_moves();
+        let mut outcome = Outcome {
+            best: None,
+            ponder: None,
+            score: 0,
+            depth: 0,
+            nodes: 0,
+        };
+        if root_moves == 0 {
+            outcome.score = if worker.td.positions[0].in_check() {
+                -MATE
+            } else {
+                0
+            };
+            return outcome;
+        }
+
+        let max_depth = limits
+            .depth
+            .unwrap_or(MAX_PLY as i32 - 1)
+            .clamp(1, MAX_PLY as i32 - 1);
+        let mut pv = Vec::with_capacity(MAX_PLY);
+        for depth in 1..=max_depth {
+            worker.seldepth = 0;
+            let score = worker.alpha_beta(0, -INFINITY, INFINITY, depth);
+            if worker.stopped {
+                break;
+            }
+
+            let line = &worker.td.pv[0];
+            pv.clear();
+            pv.extend(line.moves[..line.len].iter().flatten().copied());
+            outcome = Outcome {
+                best: pv.first().copied(),
+                ponder: pv.get(1).copied(),
+                score,
+                depth,
+                nodes: worker.nodes,
+            };
+            worker.root_best = outcome.best;
+            // From here on there is a move to play, so the search may be interrupted.
+            worker.can_stop = true;
+
+            let elapsed = start.elapsed();
+            on_iteration(&Report {
+                depth,
+                seldepth: worker.seldepth,
+                score,
+                nodes: worker.nodes,
+                elapsed,
+                pv: &pv,
+            });
+
+            if shared.stop.load(Ordering::Relaxed) {
+                break;
+            }
+            if budget.soft.is_some_and(|soft| elapsed >= soft) {
+                break;
+            }
+            // With a clock running, a forced move needs no thought.
+            if root_moves == 1 && limits.is_timed(stm) {
+                break;
+            }
+        }
+        outcome.nodes = worker.nodes;
+        outcome
+    }
+}
+
+/// One thread's view of one search.
+struct Worker<'a, E: Evaluator> {
+    td: &'a mut ThreadData<E>,
+    shared: &'a Shared,
+    start: Instant,
+    hard: Option<Duration>,
+    node_limit: Option<u64>,
+    nodes: u64,
+    seldepth: usize,
+    stopped: bool,
+    /// False until the first iteration has produced a move.
+    can_stop: bool,
+    /// Best move of the previous iteration, searched first at the root.
+    root_best: Option<Move>,
+}
+
+/// Value of the piece a capture removes, most valuable first, then cheapest attacker.
+fn capture_score(pos: &Position, mv: Move) -> i32 {
+    let victim = if mv.is_en_passant() {
+        PieceType::Pawn
+    } else {
+        pos.piece_on(mv.to())
+            .map_or(PieceType::Pawn, |piece| piece.piece_type())
+    };
+    let attacker = pos
+        .piece_on(mv.from())
+        .map_or(PieceType::Pawn, |piece| piece.piece_type());
+    16 * (victim.index() as i32 + 1) - attacker.index() as i32
+}
+
+/// Scores `list` for ordering and sorts it best first. The sort is a stable insertion
+/// sort so that equal scores keep generation order on every platform.
+fn order_moves(pos: &Position, list: &mut MoveList, first: Option<Move>) {
+    let moves = list.as_mut_slice();
+    for scored in moves.iter_mut() {
+        let mv = scored.mv;
+        scored.score = if Some(mv) == first {
+            1 << 20
+        } else {
+            let mut score = 0;
+            if mv.is_capture() {
+                score += 1_000 + capture_score(pos, mv);
+            }
+            if let Some(promotion) = mv.promotion() {
+                score += 100 * (promotion.index() as i32 + 1);
+            }
+            score
+        };
+    }
+    for i in 1..moves.len() {
+        let current: ScoredMove = moves[i];
+        let mut j = i;
+        while j > 0 && moves[j - 1].score < current.score {
+            moves[j] = moves[j - 1];
+            j -= 1;
+        }
+        moves[j] = current;
+    }
+}
+
+impl<E: Evaluator> Worker<'_, E> {
+    fn legal_root_moves(&self) -> usize {
+        let pos = &self.td.positions[0];
+        let mut list = MoveList::new();
+        gen_all(pos, &self.td.castling, &mut list);
+        list.iter()
+            .filter(|&mv| pos.is_legal(mv, &self.td.castling))
+            .count()
+    }
+
+    /// Counts a node and decides whether the search has to end.
+    #[inline]
+    fn enter_node(&mut self, ply: usize) {
+        self.nodes += 1;
+        self.seldepth = self.seldepth.max(ply);
+        if !self.can_stop {
+            return;
+        }
+        if self.node_limit.is_some_and(|limit| self.nodes >= limit) {
+            self.stopped = true;
+        }
+        if self.nodes & 1023 == 0 {
+            if self.shared.stop.load(Ordering::Relaxed) {
+                self.stopped = true;
+            }
+            if self.nodes & 2047 == 0 && self.hard.is_some_and(|hard| self.start.elapsed() >= hard)
+            {
+                self.stopped = true;
+            }
+        }
+    }
+
+    /// Whether the position at `ply` is drawn by repetition, the fifty-move rule or
+    /// lack of mating material.
+    fn is_draw(&self, ply: usize) -> bool {
+        let pos = &self.td.positions[ply];
+        let state = pos.state();
+
+        if state.halfmove >= 100 {
+            // Checkmate on the hundredth ply still counts.
+            return !pos.in_check() || self.has_legal_move(ply);
+        }
+
+        let minors = pos.pieces(PieceType::Knight) | pos.pieces(PieceType::Bishop);
+        let others = pos.pieces(PieceType::Pawn)
+            | pos.pieces(PieceType::Rook)
+            | pos.pieces(PieceType::Queen);
+        if others.is_empty() && !minors.more_than_one() {
+            return true;
+        }
+
+        // A position can only repeat one with the same side to move, and nothing
+        // before the last irreversible move or null move can recur.
+        let keys = &self.td.keys;
+        let last = keys.len() - 1;
+        let limit = (state.halfmove.min(state.plies_from_null) as usize).min(last);
+        let mut seen_before_root = false;
+        let mut back = 4;
+        while back <= limit {
+            if keys[last - back] == keys[last] {
+                // Once inside the search tree is enough; before the root it takes two.
+                if back <= ply || seen_before_root {
+                    return true;
+                }
+                seen_before_root = true;
+            }
+            back += 2;
+        }
+        false
+    }
+
+    fn has_legal_move(&self, ply: usize) -> bool {
+        let pos = &self.td.positions[ply];
+        let mut list = MoveList::new();
+        gen_all(pos, &self.td.castling, &mut list);
+        list.iter().any(|mv| pos.is_legal(mv, &self.td.castling))
+    }
+
+    /// Plays `mv` from the position at `ply` into the next slot of the stack.
+    #[inline]
+    fn make(&mut self, ply: usize, mv: Move) {
+        let (parents, children) = self.td.positions.split_at_mut(ply + 1);
+        parents[ply].make_into(mv, &self.td.castling, &mut children[0]);
+        self.td.keys.push(children[0].key());
+    }
+
+    #[inline]
+    fn unmake(&mut self) {
+        self.td.keys.pop();
+    }
+
+    fn alpha_beta(&mut self, ply: usize, mut alpha: i32, mut beta: i32, depth: i32) -> i32 {
+        if depth <= 0 {
+            return self.quiescence(ply, alpha, beta);
+        }
+        self.enter_node(ply);
+        if self.stopped {
+            return 0;
+        }
+        self.td.pv[ply].len = 0;
+
+        let root = ply == 0;
+        if !root {
+            if self.is_draw(ply) {
+                // A draw scores a point either side of zero, varying with the node
+                // count, so that the search does not see every repetition as equal.
+                return 1 - (self.nodes & 2) as i32;
+            }
+            if ply >= MAX_PLY {
+                return self.td.eval.evaluate(&self.td.positions[ply]);
+            }
+            // No line from here can beat a mate already found closer to the root.
+            alpha = alpha.max(-MATE + ply as i32);
+            beta = beta.min(MATE - ply as i32 - 1);
+            if alpha >= beta {
+                return alpha;
+            }
+        }
+
+        let mut list = MoveList::new();
+        gen_all(&self.td.positions[ply], &self.td.castling, &mut list);
+        order_moves(
+            &self.td.positions[ply],
+            &mut list,
+            if root { self.root_best } else { None },
+        );
+
+        let mut best = -INFINITY;
+        let mut legal = 0;
+        for i in 0..list.len() {
+            let mv = list.as_slice()[i].mv;
+            if !self.td.positions[ply].is_legal(mv, &self.td.castling) {
+                continue;
+            }
+            legal += 1;
+
+            self.make(ply, mv);
+            let score = -self.alpha_beta(ply + 1, -beta, -alpha, depth - 1);
+            self.unmake();
+            if self.stopped {
+                return 0;
+            }
+
+            if score > best {
+                best = score;
+                if score > alpha {
+                    alpha = score;
+                    let (line, rest) = self.td.pv.split_at_mut(ply + 1);
+                    line[ply].set(mv, &rest[0]);
+                    if score >= beta {
+                        break;
+                    }
+                }
+            }
+        }
+
+        if legal == 0 {
+            return if self.td.positions[ply].in_check() {
+                -MATE + ply as i32
+            } else {
+                0
+            };
+        }
+        best
+    }
+
+    /// Searches captures (or, in check, every evasion) until the position is quiet
+    /// enough for the static evaluation to be trusted.
+    fn quiescence(&mut self, ply: usize, mut alpha: i32, beta: i32) -> i32 {
+        self.enter_node(ply);
+        if self.stopped {
+            return 0;
+        }
+        self.td.pv[ply].len = 0;
+
+        if self.is_draw(ply) {
+            return 1 - (self.nodes & 2) as i32;
+        }
+        if ply >= MAX_PLY {
+            return self.td.eval.evaluate(&self.td.positions[ply]);
+        }
+
+        let in_check = self.td.positions[ply].in_check();
+        let mut best = -INFINITY;
+        if !in_check {
+            // The side to move may decline every capture and keep the static score.
+            best = self.td.eval.evaluate(&self.td.positions[ply]);
+            if best >= beta {
+                return best;
+            }
+            alpha = alpha.max(best);
+        }
+
+        let mut list = MoveList::new();
+        if in_check {
+            gen_evasions(&self.td.positions[ply], &mut list);
+        } else {
+            gen_noisy(&self.td.positions[ply], &mut list);
+        }
+        order_moves(&self.td.positions[ply], &mut list, None);
+
+        let mut legal = 0;
+        for i in 0..list.len() {
+            let mv = list.as_slice()[i].mv;
+            if !self.td.positions[ply].is_legal(mv, &self.td.castling) {
+                continue;
+            }
+            legal += 1;
+
+            self.make(ply, mv);
+            let score = -self.quiescence(ply + 1, -beta, -alpha);
+            self.unmake();
+            if self.stopped {
+                return 0;
+            }
+
+            if score > best {
+                best = score;
+                if score > alpha {
+                    alpha = score;
+                    if score >= beta {
+                        break;
+                    }
+                }
+            }
+        }
+
+        if in_check && legal == 0 {
+            return -MATE + ply as i32;
+        }
+        best
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::eval::Hce;
+    use crate::movegen::find_uci_move;
+
+    fn search_fen(fen: &str, limits: &Limits) -> (Outcome, ThreadData<Hce>) {
+        let (pos, ci) = Position::from_fen(fen).unwrap();
+        let mut td = ThreadData::new(Hce);
+        td.set_position(&pos, &ci, &[]);
+        let outcome = td.search(&Shared::default(), limits, 0, |_| {});
+        (outcome, td)
+    }
+
+    fn best(fen: &str, depth: i32) -> String {
+        let (outcome, _) = search_fen(fen, &Limits::depth(depth));
+        outcome
+            .best
+            .map_or("none".to_string(), |mv| mv.uci(false).to_string())
+    }
+
+    #[test]
+    fn mate_score_conversion() {
+        assert_eq!(mate_in(MATE - 1), Some(1));
+        assert_eq!(mate_in(MATE - 3), Some(2));
+        assert_eq!(mate_in(-MATE + 2), Some(-1));
+        assert_eq!(mate_in(-MATE), Some(0));
+        assert_eq!(mate_in(250), None);
+    }
+
+    #[test]
+    fn finds_mate_in_one() {
+        // Back-rank mate.
+        let (outcome, _) = search_fen("6k1/5ppp/8/8/8/8/8/R3K3 w - - 0 1", &Limits::depth(2));
+        assert_eq!(outcome.best.unwrap().uci(false).to_string(), "a1a8");
+        assert_eq!(mate_in(outcome.score), Some(1));
+    }
+
+    #[test]
+    #[cfg_attr(miri, ignore)]
+    fn finds_mate_in_two() {
+        // Two rooks walk the king down: 1. Ra7 Kg8 (or any) 2. Rb8#.
+        let (outcome, _) = search_fen("7k/8/8/8/8/8/R7/1R4K1 w - - 0 1", &Limits::depth(4));
+        assert_eq!(mate_in(outcome.score), Some(2));
+    }
+
+    #[test]
+    #[cfg_attr(miri, ignore)]
+    fn sees_being_mated() {
+        // Black to move is mated next move whatever it plays.
+        let (outcome, _) = search_fen("6k1/R7/1R6/8/8/8/8/6K1 b - - 0 1", &Limits::depth(3));
+        assert_eq!(mate_in(outcome.score), Some(-1));
+    }
+
+    #[test]
+    #[cfg_attr(miri, ignore)]
+    fn wins_material() {
+        // The queen on d8 is undefended and attacked by the rook.
+        assert_eq!(best("3q2k1/5ppp/8/8/8/8/5PPP/3R2K1 w - - 0 1", 3), "d1d8");
+        // A knight fork of king and queen.
+        assert_eq!(best("4k3/8/8/3q4/8/4N3/8/4K3 w - - 0 1", 3), "e3d5");
+    }
+
+    #[test]
+    fn no_legal_moves() {
+        let (mated, _) = search_fen("R6k/6pp/8/8/8/8/8/K7 b - - 0 1", &Limits::depth(3));
+        assert_eq!(mated.best, None);
+        assert_eq!(mated.score, -MATE);
+        let (stalemate, _) = search_fen("7k/5Q2/6K1/8/8/8/8/8 b - - 0 1", &Limits::depth(3));
+        assert_eq!(stalemate.best, None);
+        assert_eq!(stalemate.score, 0);
+    }
+
+    #[test]
+    #[cfg_attr(miri, ignore)]
+    fn bare_kings_and_lone_minor_are_drawn() {
+        for fen in [
+            "8/8/4k3/8/8/3NK3/8/8 w - - 0 1",
+            "8/8/4k3/8/8/3BK3/8/8 b - - 0 1",
+        ] {
+            let (outcome, _) = search_fen(fen, &Limits::depth(4));
+            assert!(outcome.score.abs() <= 1, "{fen}: {}", outcome.score);
+        }
+    }
+
+    #[test]
+    #[cfg_attr(miri, ignore)]
+    fn fifty_move_rule_is_a_draw() {
+        // White is a rook up, but the counter runs out on the next move.
+        let (outcome, _) = search_fen("7k/8/8/8/8/8/8/R5K1 w - - 99 80", &Limits::depth(4));
+        assert!(outcome.score.abs() <= 1, "{}", outcome.score);
+        // With the counter reset, the rook counts.
+        let (outcome, _) = search_fen("7k/8/8/8/8/8/8/R5K1 w - - 0 80", &Limits::depth(4));
+        assert!(outcome.score > 300);
+    }
+
+    fn worker<'a>(td: &'a mut ThreadData<Hce>, shared: &'a Shared) -> Worker<'a, Hce> {
+        Worker {
+            td,
+            shared,
+            start: Instant::now(),
+            hard: None,
+            node_limit: None,
+            nodes: 0,
+            seldepth: 0,
+            stopped: false,
+            can_stop: false,
+            root_best: None,
+        }
+    }
+
+    /// Shuffles the king's knights out and back `rounds` times from the start position.
+    fn shuffle(rounds: usize) -> (Position, CastlingInfo, Vec<u64>) {
+        let (mut pos, ci) = Position::startpos();
+        let mut history = Vec::new();
+        for _ in 0..rounds {
+            for text in ["g1f3", "g8f6", "f3g1", "f6g8"] {
+                history.push(pos.key());
+                pos = pos.make(find_uci_move(&pos, &ci, text).unwrap(), &ci);
+            }
+        }
+        (pos, ci, history)
+    }
+
+    #[test]
+    fn repetition_inside_the_search_tree_is_a_draw() {
+        let (pos, ci) = Position::startpos();
+        let mut td = ThreadData::new(Hce);
+        td.set_position(&pos, &ci, &[]);
+        let shared = Shared::default();
+        let mut worker = worker(&mut td, &shared);
+        for (ply, text) in ["g1f3", "g8f6", "f3g1", "f6g8"].into_iter().enumerate() {
+            assert!(!worker.is_draw(ply), "ply {ply}");
+            let mv = find_uci_move(&worker.td.positions[ply], &ci, text).unwrap();
+            worker.make(ply, mv);
+        }
+        // Ply 4 repeats the root.
+        assert!(worker.is_draw(4));
+        worker.unmake();
+        assert!(!worker.is_draw(3));
+    }
+
+    #[test]
+    fn repetition_before_the_root_needs_two_occurrences() {
+        let shared = Shared::default();
+
+        // The start position has occurred once before: not yet a draw.
+        let (pos, ci, history) = shuffle(1);
+        let mut td = ThreadData::new(Hce);
+        td.set_position(&pos, &ci, &history);
+        assert!(!worker(&mut td, &shared).is_draw(0));
+
+        // It has occurred twice before: this is the third time.
+        let (pos, ci, history) = shuffle(2);
+        td.set_position(&pos, &ci, &history);
+        assert!(worker(&mut td, &shared).is_draw(0));
+    }
+
+    #[test]
+    #[cfg_attr(miri, ignore)]
+    fn search_avoids_repeating_when_ahead() {
+        // White is a rook up. Returning the rook to a1 would repeat the position for
+        // the third time, so the search must pick something else and keep its score.
+        let (mut pos, ci) = Position::from_fen("7k/8/8/8/8/8/8/R5K1 w - - 0 1").unwrap();
+        let mut history = Vec::new();
+        for text in [
+            "a1a2", "h8g8", "a2a1", "g8h8", "a1a2", "h8g8", "a2a1", "g8h8", "a1a2", "h8g8",
+        ] {
+            history.push(pos.key());
+            pos = pos.make(find_uci_move(&pos, &ci, text).unwrap(), &ci);
+        }
+        let mut td = ThreadData::new(Hce);
+        td.set_position(&pos, &ci, &history);
+        let outcome = td.search(&shared_default(), &Limits::depth(3), 0, |_| {});
+        assert!(outcome.score > 300, "{}", outcome.score);
+    }
+
+    fn shared_default() -> Shared {
+        Shared::default()
+    }
+
+    #[test]
+    #[cfg_attr(miri, ignore)]
+    fn node_limit_is_respected_and_deterministic() {
+        let limits = Limits {
+            nodes: Some(20_000),
+            ..Limits::default()
+        };
+        let fen = "r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1";
+        let (a, _) = search_fen(fen, &limits);
+        let (b, _) = search_fen(fen, &limits);
+        assert_eq!(a, b);
+        assert!(a.best.is_some());
+        assert!(
+            a.nodes >= 20_000 && a.nodes < 20_000 + 2 * MAX_PLY as u64,
+            "{}",
+            a.nodes
+        );
+    }
+
+    #[test]
+    fn stop_flag_still_returns_a_move() {
+        let (pos, ci) = Position::startpos();
+        let mut td = ThreadData::new(Hce);
+        td.set_position(&pos, &ci, &[]);
+        let shared = Shared::default();
+        shared.stop.store(true, Ordering::Relaxed);
+        let outcome = td.search(&shared, &Limits::default(), 0, |_| {});
+        assert!(outcome.best.is_some());
+        assert_eq!(outcome.depth, 1);
+    }
+
+    #[test]
+    #[cfg_attr(miri, ignore)]
+    fn reports_every_iteration_with_a_legal_line() {
+        let (pos, ci) = Position::startpos();
+        let mut td = ThreadData::new(Hce);
+        td.set_position(&pos, &ci, &[]);
+        let mut depths = Vec::new();
+        td.search(&Shared::default(), &Limits::depth(4), 0, |report| {
+            depths.push(report.depth);
+            assert!(!report.pv.is_empty());
+            let mut line = pos.clone();
+            for &mv in report.pv {
+                assert!(
+                    line.is_pseudo_legal(mv, &ci) && line.is_legal(mv, &ci),
+                    "{mv:?}"
+                );
+                line = line.make(mv, &ci);
+            }
+        });
+        assert_eq!(depths, [1, 2, 3, 4]);
+    }
+}

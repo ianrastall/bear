@@ -31,6 +31,16 @@ jobs:
         run: |
           cargo run --release -p perft -- suite crates/perft/suites/standard.epd
           cargo run --release -p perft -- suite crates/perft/suites/extended.epd
+      - name: Bench
+        shell: bash
+        run: |
+          nodes=$(cargo run --release -p bear-uci -- bench | awk '{print $1}')
+          echo "Bench: $nodes"
+          expected=$(git log -1 --pretty=%B | grep -oE '^Bench: [0-9]+$' | tail -1 | awk '{print $2}' || true)
+          if [ -n "$expected" ] && [ "$nodes" != "$expected" ]; then
+            echo "::error::bench is $nodes but the commit message says $expected"
+            exit 1
+          fi
 
   miri:
     runs-on: ubuntu-latest
