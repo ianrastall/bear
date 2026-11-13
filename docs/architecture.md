@@ -804,3 +804,9 @@ Every milestone ends with a binary that builds, passes CI and has measurable exi
 | M10 | Hardening | MultiPV, ponder, Chess960 verification, `searchmoves`, UCI compliance check, 24-hour soak at mixed time controls, versioned release | Zero protocol violations; Chess960 perft EPD passes; soak produces no crash, hang or time loss; tagged release with per-tier binaries and recorded bench |
 
 Killers, countermoves and the check extension get `[−5, 0]` removal tests during M5 and again after M9.
+
+### 7.4 Milestone results
+
+Perft and fuzzing results for M1 are in 7.1.
+
+**M2.** Bench 22,808,147 nodes on Linux and Windows. The self-play run was 2,000 games at 8+0.08 between two copies of commit `fb26e67`, played by fastchess 1.8.2 seven at a time, each of the first 1,000 positions of `books/bear-8ply.epd` with both colours. All 2,000 games ended by the rules of chess (1,580 decisive, 420 drawn); there was no crash, illegal move or time loss.
