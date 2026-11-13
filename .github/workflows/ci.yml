@@ -16,7 +16,7 @@ jobs:
         os: [ubuntu-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Toolchain
         run: rustup show
       - name: Format
@@ -27,11 +27,15 @@ jobs:
         run: cargo test --workspace
       - name: Release build
         run: cargo build --release
+      - name: Perft suites
+        run: |
+          cargo run --release -p perft -- suite crates/perft/suites/standard.epd
+          cargo run --release -p perft -- suite crates/perft/suites/extended.epd
 
   miri:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Install Miri
         run: rustup toolchain install nightly --profile minimal --component miri
       - name: Miri (engine-core)

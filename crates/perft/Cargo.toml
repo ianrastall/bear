@@ -1,0 +1,16 @@
+[package]
+name = "perft"
+description = "Perft, divide, suite runner and differential fuzzer for the Bear chess engine"
+publish = false
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+bear-core = { path = "../engine-core" }
+
+[lints]
+workspace = true

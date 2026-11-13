@@ -9,3 +9,14 @@ version = "0.1.0"
 [[package]]
 name = "bear-uci"
 version = "0.1.0"
+
+[[package]]
+name = "perft"
+version = "0.1.0"
+dependencies = [
+ "bear-core",
+]
+
+[[package]]
+name = "xtask"
+version = "0.1.0"

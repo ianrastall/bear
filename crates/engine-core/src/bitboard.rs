@@ -78,6 +78,37 @@ impl Bitboard {
         }
     }
 
+    /// The lowest-indexed square in the set, which must not be empty.
+    #[inline]
+    pub const fn first(self) -> Square {
+        debug_assert!(self.0 != 0);
+        Square::from_index((self.0.trailing_zeros() & 63) as u8)
+    }
+
+    /// Every square moved one rank towards the eighth rank.
+    #[inline]
+    pub const fn north(self) -> Bitboard {
+        Bitboard(self.0 << 8)
+    }
+
+    /// Every square moved one rank towards the first rank.
+    #[inline]
+    pub const fn south(self) -> Bitboard {
+        Bitboard(self.0 >> 8)
+    }
+
+    /// Every square moved one file towards the h-file; squares on the h-file drop off.
+    #[inline]
+    pub const fn east(self) -> Bitboard {
+        Bitboard((self.0 & !Self::FILE_H.0) << 1)
+    }
+
+    /// Every square moved one file towards the a-file; squares on the a-file drop off.
+    #[inline]
+    pub const fn west(self) -> Bitboard {
+        Bitboard((self.0 & !Self::FILE_A.0) >> 1)
+    }
+
     /// Removes and returns the lowest-indexed square in the set, if any.
     #[inline]
     pub const fn pop_lsb(&mut self) -> Option<Square> {
