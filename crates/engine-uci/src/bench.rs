@@ -13,7 +13,7 @@ use bear_core::time::Limits;
 use bear_core::tt::TranspositionTable;
 
 /// Depth searched when `bench` is given no argument.
-pub const DEFAULT_DEPTH: i32 = 10;
+pub const DEFAULT_DEPTH: i32 = 14;
 
 /// Openings, middlegames and endgames, with both sides to move.
 pub const POSITIONS: [&str; 24] = [

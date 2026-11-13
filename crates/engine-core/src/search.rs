@@ -30,6 +30,42 @@ const RFP_MARGIN: i32 = 75;
 const NMP_MIN_DEPTH: i32 = 3;
 /// From this depth a null-move cutoff is checked by a search without null moves.
 const NMP_VERIFY_DEPTH: i32 = 14;
+/// One ply of reduction in the fixed-point units of the reduction table.
+const LMR_ONE: i32 = 1024;
+
+/// The natural logarithm of `x >= 1`, from additions, multiplications and divisions
+/// only, so that every platform computes the same reduction table.
+fn ln(x: f64) -> f64 {
+    let mut halvings = 0.0;
+    let mut m = x;
+    while m >= 2.0 {
+        m /= 2.0;
+        halvings += 1.0;
+    }
+    // ln m = 2 atanh((m - 1) / (m + 1)), and the argument is below one third.
+    let y = (m - 1.0) / (m + 1.0);
+    let mut power = y;
+    let mut sum = 0.0;
+    let mut n = 1.0;
+    for _ in 0..40 {
+        sum += power / n;
+        power *= y * y;
+        n += 2.0;
+    }
+    2.0 * sum + halvings * std::f64::consts::LN_2
+}
+
+/// Base late-move reductions by depth and move number, in units of `1 / LMR_ONE` ply.
+fn lmr_table() -> Box<[[i32; 64]]> {
+    let mut table = vec![[0; 64]; 64].into_boxed_slice();
+    for (depth, row) in table.iter_mut().enumerate().skip(1) {
+        for (number, entry) in row.iter_mut().enumerate().skip(1) {
+            let plies = 0.78 + ln(depth as f64) * ln(number as f64) / 2.47;
+            *entry = (plies * LMR_ONE as f64) as i32;
+        }
+    }
+    table
+}
 
 /// What a search shares with other threads, borrowed for the length of one `go`.
 #[derive(Copy, Clone)]
@@ -113,6 +149,7 @@ pub struct ThreadData<E: Evaluator> {
     /// The piece and target square of the move that led to each ply; `None` at the
     /// root and after a null move.
     moved: Box<[Option<(Piece, Square)>]>,
+    lmr: Box<[[i32; 64]]>,
     /// Keys of every position from the start of the game to the current node.
     keys: Vec<u64>,
     castling: CastlingInfo,
@@ -129,6 +166,7 @@ impl<E: Evaluator> ThreadData<E> {
             killers: vec![[None; 2]; MAX_PLY + 1].into_boxed_slice(),
             evals: vec![NO_EVAL; MAX_PLY + 1].into_boxed_slice(),
             moved: vec![None; MAX_PLY + 2].into_boxed_slice(),
+            lmr: lmr_table(),
             keys,
             castling,
         }
@@ -205,7 +243,7 @@ impl<E: Evaluator> ThreadData<E> {
         let mut pv = Vec::with_capacity(MAX_PLY);
         for depth in 1..=max_depth {
             worker.seldepth = 0;
-            let score = worker.alpha_beta(0, -INFINITY, INFINITY, depth);
+            let score = worker.alpha_beta(0, -INFINITY, INFINITY, depth, false);
             if worker.stopped {
                 break;
             }
@@ -375,8 +413,16 @@ impl<E: Evaluator> Worker<'_, E> {
     }
 
     /// The main search. A node with a window wider than one point is on the principal
-    /// variation; everywhere else only the side of the window matters.
-    fn alpha_beta(&mut self, ply: usize, mut alpha: i32, mut beta: i32, depth: i32) -> i32 {
+    /// variation; everywhere else only the side of the window matters. `cut_node` says
+    /// that a cutoff is expected here, which makes its later moves unlikely to matter.
+    fn alpha_beta(
+        &mut self,
+        ply: usize,
+        mut alpha: i32,
+        mut beta: i32,
+        depth: i32,
+        cut_node: bool,
+    ) -> i32 {
         if depth <= 0 {
             return self.quiescence(ply, alpha, beta);
         }
@@ -413,9 +459,12 @@ impl<E: Evaluator> Worker<'_, E> {
         // The static evaluation, replaced by a table score that is known to be
         // nearer the truth on the side that matters.
         let mut eval = NO_EVAL;
+        // Whether this position is, or has been, on a principal variation.
+        let mut tt_pv = is_pv;
         let entry = self.shared.tt.probe(key);
         if let Some(entry) = entry {
             tt_move = entry.mv;
+            tt_pv |= entry.pv;
             static_eval = entry.eval;
             let score = from_tt(entry.score, ply, halfmove);
             // Near the fifty-move limit the stored score may rest on lines that the
@@ -488,7 +537,8 @@ impl<E: Evaluator> Worker<'_, E> {
             {
                 let reduction = 4 + depth / 4 + ((eval - beta) / 200).min(3);
                 self.make_null(ply);
-                let mut score = -self.alpha_beta(ply + 1, -beta, -beta + 1, depth - reduction);
+                let mut score =
+                    -self.alpha_beta(ply + 1, -beta, -beta + 1, depth - reduction, !cut_node);
                 self.unmake();
                 if self.stopped {
                     return 0;
@@ -504,7 +554,7 @@ impl<E: Evaluator> Worker<'_, E> {
                     // At high depth, confirm with a reduced search in which this
                     // side may not pass again for most of the way down.
                     self.nmp_min_ply = ply + (3 * (depth - reduction) / 4) as usize;
-                    let verified = self.alpha_beta(ply, beta - 1, beta, depth - reduction);
+                    let verified = self.alpha_beta(ply, beta - 1, beta, depth - reduction, false);
                     self.nmp_min_ply = 0;
                     if self.stopped {
                         return 0;
@@ -520,12 +570,9 @@ impl<E: Evaluator> Worker<'_, E> {
             // The last iteration's choice is at least as good a guide as the table.
             tt_move = self.root_best.or(tt_move);
         }
-        let mut picker = MovePicker::new(
-            &self.td.positions[ply],
-            &self.td.castling,
-            tt_move,
-            self.td.killers[ply],
-        );
+        let killers = self.td.killers[ply];
+        let mut picker =
+            MovePicker::new(&self.td.positions[ply], &self.td.castling, tt_move, killers);
 
         let old_alpha = alpha;
         let mut best = -INFINITY;
@@ -538,17 +585,38 @@ impl<E: Evaluator> Worker<'_, E> {
             legal += 1;
 
             self.make(ply, mv);
+            let new_depth = depth - 1;
+            let gives_check = self.td.positions[ply + 1].in_check();
+
             // The first move is expected to be best. The others only have to be shown
             // not to beat it, which a window of one point does; one that does beat it
             // on the principal variation is searched again for its real score.
-            let mut score;
-            if legal == 1 {
-                score = -self.alpha_beta(ply + 1, -beta, -alpha, depth - 1);
-            } else {
-                score = -self.alpha_beta(ply + 1, -alpha - 1, -alpha, depth - 1);
-                if score > alpha && score < beta {
-                    score = -self.alpha_beta(ply + 1, -beta, -alpha, depth - 1);
+            let mut score = -INFINITY;
+            if depth >= 2 && legal > 1 + root as usize + is_pv as usize {
+                // Late moves are searched to reduced depth first, and at full depth
+                // only if they then look better than expected.
+                let mut reduction = self.td.lmr[depth.min(63) as usize][legal.min(63)];
+                if is_noisy(mv) {
+                    reduction /= 2;
                 }
+                reduction += LMR_ONE * (!improving) as i32;
+                reduction += LMR_ONE * cut_node as i32;
+                reduction -= LMR_ONE * is_pv as i32;
+                reduction -= LMR_ONE * tt_pv as i32;
+                reduction -= LMR_ONE * gives_check as i32;
+                reduction -= LMR_ONE * killers.contains(&Some(mv)) as i32;
+                reduction += LMR_ONE * tt_move.is_some_and(|mv| mv.is_capture()) as i32;
+
+                let reduced = (new_depth - reduction / LMR_ONE).clamp(1, new_depth);
+                score = -self.alpha_beta(ply + 1, -alpha - 1, -alpha, reduced, true);
+                if score > alpha && reduced < new_depth {
+                    score = -self.alpha_beta(ply + 1, -alpha - 1, -alpha, new_depth, !cut_node);
+                }
+            } else if !is_pv || legal > 1 {
+                score = -self.alpha_beta(ply + 1, -alpha - 1, -alpha, new_depth, !cut_node);
+            }
+            if is_pv && (legal == 1 || (score > alpha && score < beta)) {
+                score = -self.alpha_beta(ply + 1, -beta, -alpha, new_depth, false);
             }
             self.unmake();
             if self.stopped {
@@ -597,7 +665,7 @@ impl<E: Evaluator> Worker<'_, E> {
                 eval: static_eval,
                 depth,
                 bound,
-                pv: is_pv,
+                pv: tt_pv,
             },
         );
         best
@@ -775,6 +843,20 @@ mod tests {
         outcome
             .best
             .map_or("none".to_string(), |mv| mv.uci(false).to_string())
+    }
+
+    #[test]
+    fn reduction_table() {
+        for x in [1.0, 1.5, 2.0, 3.0, 10.0, 63.0, 64.0] {
+            assert!((ln(x) - f64::ln(x)).abs() < 1e-12, "{x}");
+        }
+        let table = lmr_table();
+        // The first move at any depth and any move at depth 1 get the constant only.
+        assert_eq!(table[1][17], 798);
+        assert_eq!(table[9][1], 798);
+        // 0.78 + ln 8 * ln 8 / 2.47 = 2.53 plies.
+        assert_eq!(table[8][8] / 102, 25);
+        assert!(table[63][63] > table[8][8] && table[63][63] < 8 * LMR_ONE);
     }
 
     #[test]

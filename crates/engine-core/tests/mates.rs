@@ -14,8 +14,9 @@ use bear_core::tt::TranspositionTable;
 
 const SUITE: &str = include_str!("mates.epd");
 
-/// Plies searched beyond the mating move.
-const EXTRA_PLIES: i32 = 6;
+/// Plies searched beyond the mating move. `BEAR_MATES_EXTRA` overrides it, to find out
+/// how much a change to the search needs.
+const EXTRA_PLIES: i32 = 10;
 
 /// Searches every position of the suite with a mate in at most `longest` moves to
 /// depth 2k - 1 + EXTRA_PLIES and returns how many it tried.
@@ -27,6 +28,11 @@ fn solve(longest: i32) -> usize {
         tt: &tt,
     };
     let mut tried = 0;
+    let mut failures = Vec::new();
+    let extra = std::env::var("BEAR_MATES_EXTRA")
+        .ok()
+        .and_then(|plies| plies.parse().ok())
+        .unwrap_or(EXTRA_PLIES);
     for line in SUITE.lines() {
         let line = line.trim();
         if line.is_empty() || line.starts_with('#') {
@@ -45,18 +51,23 @@ fn solve(longest: i32) -> usize {
         let mut td = ThreadData::new(Hce);
         td.set_position(&pos, &ci, &[]);
         tt.clear();
-        let depth = 2 * moves - 1 + EXTRA_PLIES;
+        let depth = 2 * moves - 1 + extra;
         let outcome = td.search(shared, &Limits::depth(depth), 0, |_| {});
         let found = mate_in(outcome.score);
-        if std::env::var_os("BEAR_MATES_VERBOSE").is_some() {
-            println!("{found:?} at depth {depth}: {line}");
+        // A mate, and not a shorter one than exists.
+        if !found.is_some_and(|m| m >= moves) {
+            failures.push(format!("{line}: found {found:?} at depth {depth}"));
         }
-        assert!(
-            found.is_some_and(|m| m >= moves),
-            "{line}: found {found:?} at depth {depth}"
-        );
         tried += 1;
     }
+    assert!(
+        failures.is_empty(),
+        "{}",
+        failures.join(
+            "
+"
+        )
+    );
     tried
 }
 
