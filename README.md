@@ -24,6 +24,7 @@ Point a chess interface that speaks UCI at the `bear` binary. Supported commands
 
 | Option | Meaning |
 |---|---|
+| `Hash` | Size of the transposition table in megabytes. Default 16. |
 | `Move Overhead` | Milliseconds kept back from the clock on every move for communication delay. Default 10. |
 | `UCI_Chess960` | Write castling as king takes rook. Castling is accepted in either notation regardless. |
 

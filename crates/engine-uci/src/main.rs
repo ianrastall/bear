@@ -17,8 +17,6 @@ use std::io::BufRead;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 
-use bear_core::search::Shared;
-
 use command::Command;
 use engine::{Engine, Output};
 
@@ -36,12 +34,12 @@ fn main() {
 
 /// Runs the protocol until `quit` or end of input, then waits for queued work to finish.
 fn run(input: impl BufRead, out: Output) {
-    let shared = Shared::default();
+    let stop = AtomicBool::new(false);
     let searching = AtomicBool::new(false);
     let (sender, receiver) = mpsc::channel::<Command>();
 
     std::thread::scope(|scope| {
-        let (shared, searching) = (&shared, &searching);
+        let (stop, searching) = (&stop, &searching);
         let coordinator_out = out.clone();
         std::thread::Builder::new()
             .name("coordinator".to_string())
@@ -49,7 +47,7 @@ fn run(input: impl BufRead, out: Output) {
             .spawn_scoped(scope, move || {
                 let mut engine = Engine::new(coordinator_out);
                 for command in receiver {
-                    engine.handle(command, shared, searching);
+                    engine.handle(command, stop, searching);
                 }
             })
             .expect("the coordinator thread can be started");
@@ -61,7 +59,7 @@ fn run(input: impl BufRead, out: Output) {
             };
             let forwarded = match command {
                 Command::Stop => {
-                    shared.stop.store(true, Ordering::Relaxed);
+                    stop.store(true, Ordering::Relaxed);
                     continue;
                 }
                 Command::Quit => break,
@@ -74,7 +72,7 @@ fn run(input: impl BufRead, out: Output) {
                 Command::Go(_) => {
                     // Both flags change here, not in the coordinator, so that a `stop`
                     // or `isready` arriving before the search starts is not lost.
-                    shared.stop.store(false, Ordering::Relaxed);
+                    stop.store(false, Ordering::Relaxed);
                     searching.store(true, Ordering::Relaxed);
                     command
                 }
@@ -88,7 +86,7 @@ fn run(input: impl BufRead, out: Output) {
         // Quit or end of input: cut short any search, then closing the channel lets
         // the coordinator finish what is queued and exit.
         if searching.load(Ordering::Relaxed) {
-            shared.stop.store(true, Ordering::Relaxed);
+            stop.store(true, Ordering::Relaxed);
         }
         drop(sender);
     });
@@ -211,7 +209,9 @@ mod tests {
     #[test]
     fn options() {
         assert_eq!(session("setoption name Move Overhead value 50\n"), "");
-        assert!(session("setoption name Hash value 16\n").contains("info string unknown option"));
+        assert_eq!(session("setoption name Hash value 4\n"), "");
+        assert!(session("setoption name Hash value big\n").contains("needs a number"));
+        assert!(session("setoption name Threads value 2\n").contains("info string unknown option"));
         assert!(session("setoption name Move Overhead value lots\n").contains("needs a number"));
     }
 

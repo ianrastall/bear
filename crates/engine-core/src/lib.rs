@@ -20,6 +20,7 @@ pub mod position;
 pub mod search;
 pub mod square;
 pub mod time;
+pub mod tt;
 pub mod zobrist;
 
 pub use bitboard::Bitboard;

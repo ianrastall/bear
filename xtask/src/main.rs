@@ -2,6 +2,7 @@
 
 #![forbid(unsafe_code)]
 
+mod sprt;
 #[path = "../../crates/engine-core/src/attacks/tablegen.rs"]
 mod tablegen;
 
@@ -10,15 +11,19 @@ use std::path::Path;
 use std::process::ExitCode;
 
 fn main() -> ExitCode {
-    let task = std::env::args().nth(1);
-    match task.as_deref() {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    match args.first().map(String::as_str) {
         Some("find-magics") => find_magics(),
+        Some("sprt") => sprt::run_task(&args[1..]),
         _ => {
             eprintln!("usage: cargo xtask <task>");
             eprintln!();
             eprintln!("tasks:");
             eprintln!(
                 "  find-magics   search for slider magic numbers and rewrite attacks/magics.rs"
+            );
+            eprintln!(
+                "  sprt          test the working tree against an earlier revision with fastchess"
             );
             ExitCode::FAILURE
         }

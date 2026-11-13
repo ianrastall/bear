@@ -6,11 +6,13 @@
 use std::collections::HashSet;
 use std::fmt::Write as _;
 use std::process::ExitCode;
+use std::sync::atomic::AtomicBool;
 
 use bear_core::eval::Hce;
 use bear_core::movegen::{MoveList, gen_legal};
 use bear_core::search::{Shared, ThreadData};
 use bear_core::time::Limits;
+use bear_core::tt::TranspositionTable;
 use bear_core::{CastlingInfo, Position};
 
 const USAGE: &str = "\
@@ -97,7 +99,12 @@ fn random_opening(rng: &mut Rng, plies: usize) -> Option<(Position, CastlingInfo
 
 fn openings(options: &Options) -> Result<(), String> {
     let mut rng = Rng(options.seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1);
-    let shared = Shared::default();
+    let stop = AtomicBool::new(false);
+    let tt = TranspositionTable::new(TranspositionTable::DEFAULT_MB);
+    let shared = Shared {
+        stop: &stop,
+        tt: &tt,
+    };
     let limits = Limits::depth(options.depth);
     let mut thread = ThreadData::new(Hce);
 
@@ -119,7 +126,7 @@ fn openings(options: &Options) -> Result<(), String> {
             continue;
         }
         thread.set_position(&pos, &ci, &history);
-        let outcome = thread.search(&shared, &limits, 0, |_| {});
+        let outcome = thread.search(shared, &limits, 0, |_| {});
         if outcome.best.is_none() || outcome.score.abs() > options.max_cp {
             continue;
         }

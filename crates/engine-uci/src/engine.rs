@@ -11,6 +11,7 @@ use bear_core::movegen::find_uci_move;
 use bear_core::perft::divide;
 use bear_core::search::{Report, Shared, ThreadData, mate_in};
 use bear_core::time::Limits;
+use bear_core::tt::TranspositionTable;
 use bear_core::{CastlingInfo, Position};
 
 use crate::bench;
@@ -64,6 +65,7 @@ pub struct Engine {
     /// Keys of every position before the current one, oldest first.
     history: Vec<u64>,
     thread: ThreadData<Hce>,
+    tt: TranspositionTable,
     move_overhead: u64,
     chess960: bool,
 }
@@ -77,20 +79,24 @@ impl Engine {
             castling,
             history: Vec::new(),
             thread: ThreadData::new(Hce),
+            tt: TranspositionTable::new(TranspositionTable::DEFAULT_MB),
             move_overhead: DEFAULT_MOVE_OVERHEAD,
             chess960: false,
         }
     }
 
     /// Carries out one command. `searching` is cleared once a `go` has been answered.
-    pub fn handle(&mut self, command: Command, shared: &Shared, searching: &AtomicBool) {
+    pub fn handle(&mut self, command: Command, stop: &AtomicBool, searching: &AtomicBool) {
         match command {
             Command::Uci => self.identify(),
             Command::IsReady => say!(self.out, "readyok"),
-            Command::UciNewGame => self.thread = ThreadData::new(Hce),
+            Command::UciNewGame => {
+                self.thread = ThreadData::new(Hce);
+                self.tt.clear();
+            }
             Command::Position { fen, moves } => self.set_position(fen.as_deref(), &moves),
             Command::Go(limits) => {
-                self.go(&limits, shared);
+                self.go(&limits, stop);
                 searching.store(false, Ordering::Relaxed);
             }
             Command::SetOption { name, value } => self.set_option(&name, value.as_deref()),
@@ -111,6 +117,12 @@ impl Engine {
         say!(self.out, "id author {AUTHOR}");
         say!(
             self.out,
+            "option name Hash type spin default {} min 1 max {}",
+            TranspositionTable::DEFAULT_MB,
+            TranspositionTable::MAX_MB
+        );
+        say!(
+            self.out,
             "option name Move Overhead type spin default {DEFAULT_MOVE_OVERHEAD} min 0 max {MAX_MOVE_OVERHEAD}"
         );
         say!(
@@ -122,6 +134,19 @@ impl Engine {
 
     fn set_option(&mut self, name: &str, value: Option<&str>) {
         match (name.to_ascii_lowercase().as_str(), value) {
+            ("hash", Some(value)) => match value.parse::<usize>() {
+                Ok(megabytes) => {
+                    let wanted = megabytes.clamp(1, TranspositionTable::MAX_MB);
+                    let got = self.tt.resize(wanted);
+                    if got != wanted {
+                        say!(
+                            self.out,
+                            "info string Hash set to {got} MB; {wanted} MB could not be allocated"
+                        );
+                    }
+                }
+                Err(_) => say!(self.out, "info string Hash needs a number, got {value}"),
+            },
             ("move overhead", Some(value)) => match value.parse::<u64>() {
                 Ok(ms) => self.move_overhead = ms.min(MAX_MOVE_OVERHEAD),
                 Err(_) => say!(
@@ -164,7 +189,8 @@ impl Engine {
         self.history = history;
     }
 
-    fn go(&mut self, limits: &Limits, shared: &Shared) {
+    fn go(&mut self, limits: &Limits, stop: &AtomicBool) {
+        let shared = Shared { stop, tt: &self.tt };
         let out = &self.out;
         let chess960 = self.chess960;
         self.thread
@@ -178,7 +204,7 @@ impl Engine {
         // An infinite search may not answer until it is told to stop, even if it has
         // nothing left to search.
         if limits.infinite {
-            while !shared.stop.load(Ordering::Relaxed) {
+            while !stop.load(Ordering::Relaxed) {
                 std::thread::sleep(Duration::from_millis(1));
             }
         }
@@ -256,10 +282,11 @@ fn print_info(out: &Output, report: &Report, chess960: bool) {
         .collect();
     say!(
         out,
-        "info depth {} seldepth {} score {score} nodes {} nps {nps} time {millis} pv {}",
+        "info depth {} seldepth {} score {score} nodes {} nps {nps} hashfull {} time {millis} pv {}",
         report.depth,
         report.seldepth,
         report.nodes,
+        report.hashfull,
         pv.join(" ")
     );
 }

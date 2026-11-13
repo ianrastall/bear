@@ -3,12 +3,14 @@
 //! Any change to search or evaluation changes the count, and a change that claims to
 //! alter nothing must leave it alone. The count is the same on every platform.
 
+use std::sync::atomic::AtomicBool;
 use std::time::Instant;
 
 use bear_core::Position;
 use bear_core::eval::Hce;
 use bear_core::search::{Shared, ThreadData};
 use bear_core::time::Limits;
+use bear_core::tt::TranspositionTable;
 
 /// Depth searched when `bench` is given no argument.
 pub const DEFAULT_DEPTH: i32 = 6;
@@ -46,9 +48,15 @@ pub struct BenchResult {
     pub nps: u64,
 }
 
-/// Searches every position to `depth` with a fresh thread state and sums the nodes.
+/// Searches every position to `depth` and sums the nodes. Each search starts with a
+/// fresh thread state and an empty table of the default size.
 pub fn run(depth: i32) -> BenchResult {
-    let shared = Shared::default();
+    let stop = AtomicBool::new(false);
+    let tt = TranspositionTable::new(TranspositionTable::DEFAULT_MB);
+    let shared = Shared {
+        stop: &stop,
+        tt: &tt,
+    };
     let limits = Limits::depth(depth);
     let start = Instant::now();
     let mut nodes = 0;
@@ -56,7 +64,8 @@ pub fn run(depth: i32) -> BenchResult {
         let (pos, ci) = Position::from_fen(fen).expect("bench positions are valid");
         let mut td = ThreadData::new(Hce);
         td.set_position(&pos, &ci, &[]);
-        nodes += td.search(&shared, &limits, 0, |_| {}).nodes;
+        tt.clear();
+        nodes += td.search(shared, &limits, 0, |_| {}).nodes;
     }
     let seconds = start.elapsed().as_secs_f64();
     let nps = if seconds > 0.0 {

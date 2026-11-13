@@ -10,6 +10,7 @@ use std::time::{Duration, Instant};
 use crate::eval::Evaluator;
 use crate::movegen::{MoveList, ScoredMove, gen_all, gen_evasions, gen_noisy};
 use crate::time::{Limits, TimeBudget};
+use crate::tt::{Bound, NO_EVAL, TranspositionTable, TtEntry, from_tt, to_tt};
 use crate::{CastlingInfo, Move, PieceType, Position};
 
 /// Deepest ply the search can reach.
@@ -20,11 +21,12 @@ pub const MATE: i32 = 32_000;
 pub const MATE_BOUND: i32 = MATE - MAX_PLY as i32;
 const INFINITY: i32 = MATE + 1;
 
-/// State shared by every search thread and by the thread reading commands.
-#[derive(Default, Debug)]
-pub struct Shared {
+/// What a search shares with other threads, borrowed for the length of one `go`.
+#[derive(Copy, Clone)]
+pub struct Shared<'a> {
     /// Set to make a running search return as soon as it can.
-    pub stop: AtomicBool,
+    pub stop: &'a AtomicBool,
+    pub tt: &'a TranspositionTable,
 }
 
 /// What the search knows after completing an iteration.
@@ -37,6 +39,8 @@ pub struct Report<'a> {
     pub score: i32,
     pub nodes: u64,
     pub elapsed: Duration,
+    /// Share of the transposition table used by this search, in parts per thousand.
+    pub hashfull: usize,
     /// The principal variation, starting with the best move.
     pub pv: &'a [Move],
 }
@@ -129,12 +133,13 @@ impl<E: Evaluator> ThreadData<E> {
     /// completed depth. `overhead_ms` is kept back from the clock.
     pub fn search(
         &mut self,
-        shared: &Shared,
+        shared: Shared,
         limits: &Limits,
         overhead_ms: u64,
         mut on_iteration: impl FnMut(&Report),
     ) -> Outcome {
         let start = Instant::now();
+        shared.tt.new_search();
         let stm = self.positions[0].stm();
         let budget = TimeBudget::new(limits, stm, overhead_ms);
         // Room for the deepest line plus this search's own pushes.
@@ -203,6 +208,7 @@ impl<E: Evaluator> ThreadData<E> {
                 score,
                 nodes: worker.nodes,
                 elapsed,
+                hashfull: shared.tt.hashfull(),
                 pv: &pv,
             });
 
@@ -225,7 +231,7 @@ impl<E: Evaluator> ThreadData<E> {
 /// One thread's view of one search.
 struct Worker<'a, E: Evaluator> {
     td: &'a mut ThreadData<E>,
-    shared: &'a Shared,
+    shared: Shared<'a>,
     start: Instant,
     hard: Option<Duration>,
     node_limit: Option<u64>,
@@ -401,15 +407,38 @@ impl<E: Evaluator> Worker<'_, E> {
             }
         }
 
+        let key = self.td.positions[ply].key();
+        let halfmove = self.td.positions[ply].state().halfmove;
+        let mut tt_move = None;
+        if let Some(entry) = self.shared.tt.probe(key) {
+            tt_move = entry.mv;
+            let score = from_tt(entry.score, ply, halfmove);
+            // Near the fifty-move limit the stored score may rest on lines that the
+            // rule now cuts short.
+            if !root
+                && entry.depth >= depth
+                && halfmove < 90
+                && entry.bound.cuts(score, alpha, beta)
+            {
+                return score;
+            }
+        }
+
         let mut list = MoveList::new();
         gen_all(&self.td.positions[ply], &self.td.castling, &mut list);
         order_moves(
             &self.td.positions[ply],
             &mut list,
-            if root { self.root_best } else { None },
+            if root {
+                self.root_best.or(tt_move)
+            } else {
+                tt_move
+            },
         );
 
+        let old_alpha = alpha;
         let mut best = -INFINITY;
+        let mut best_move = None;
         let mut legal = 0;
         for i in 0..list.len() {
             let mv = list.as_slice()[i].mv;
@@ -429,6 +458,7 @@ impl<E: Evaluator> Worker<'_, E> {
                 best = score;
                 if score > alpha {
                     alpha = score;
+                    best_move = Some(mv);
                     let (line, rest) = self.td.pv.split_at_mut(ply + 1);
                     line[ply].set(mv, &rest[0]);
                     if score >= beta {
@@ -445,6 +475,25 @@ impl<E: Evaluator> Worker<'_, E> {
                 0
             };
         }
+
+        let bound = if best >= beta {
+            Bound::Lower
+        } else if best > old_alpha {
+            Bound::Exact
+        } else {
+            Bound::Upper
+        };
+        self.shared.tt.store(
+            key,
+            TtEntry {
+                mv: best_move,
+                score: to_tt(best, ply),
+                eval: NO_EVAL,
+                depth,
+                bound,
+                pv: false,
+            },
+        );
         best
     }
 
@@ -464,12 +513,33 @@ impl<E: Evaluator> Worker<'_, E> {
             return self.td.eval.evaluate(&self.td.positions[ply]);
         }
 
+        let key = self.td.positions[ply].key();
+        let halfmove = self.td.positions[ply].state().halfmove;
+        let mut tt_move = None;
+        let mut static_eval = NO_EVAL;
+        if let Some(entry) = self.shared.tt.probe(key) {
+            tt_move = entry.mv;
+            static_eval = entry.eval;
+            let score = from_tt(entry.score, ply, halfmove);
+            if halfmove < 90 && entry.bound.cuts(score, alpha, beta) {
+                return score;
+            }
+        }
+
         let in_check = self.td.positions[ply].in_check();
+        let old_alpha = alpha;
         let mut best = -INFINITY;
-        if !in_check {
+        let mut best_move = None;
+        if in_check {
+            static_eval = NO_EVAL;
+        } else {
             // The side to move may decline every capture and keep the static score.
-            best = self.td.eval.evaluate(&self.td.positions[ply]);
+            if static_eval == NO_EVAL {
+                static_eval = self.td.eval.evaluate(&self.td.positions[ply]);
+            }
+            best = static_eval;
             if best >= beta {
+                self.store_quiescence(key, None, best, static_eval, Bound::Lower, ply);
                 return best;
             }
             alpha = alpha.max(best);
@@ -481,7 +551,7 @@ impl<E: Evaluator> Worker<'_, E> {
         } else {
             gen_noisy(&self.td.positions[ply], &mut list);
         }
-        order_moves(&self.td.positions[ply], &mut list, None);
+        order_moves(&self.td.positions[ply], &mut list, tt_move);
 
         let mut legal = 0;
         for i in 0..list.len() {
@@ -502,6 +572,7 @@ impl<E: Evaluator> Worker<'_, E> {
                 best = score;
                 if score > alpha {
                     alpha = score;
+                    best_move = Some(mv);
                     if score >= beta {
                         break;
                     }
@@ -512,7 +583,38 @@ impl<E: Evaluator> Worker<'_, E> {
         if in_check && legal == 0 {
             return -MATE + ply as i32;
         }
+
+        let bound = if best >= beta {
+            Bound::Lower
+        } else if best > old_alpha {
+            Bound::Exact
+        } else {
+            Bound::Upper
+        };
+        self.store_quiescence(key, best_move, best, static_eval, bound, ply);
         best
+    }
+
+    fn store_quiescence(
+        &self,
+        key: u64,
+        mv: Option<Move>,
+        score: i32,
+        static_eval: i32,
+        bound: Bound,
+        ply: usize,
+    ) {
+        self.shared.tt.store(
+            key,
+            TtEntry {
+                mv,
+                score: to_tt(score, ply),
+                eval: static_eval,
+                depth: 0,
+                bound,
+                pv: false,
+            },
+        );
     }
 }
 
@@ -522,11 +624,33 @@ mod tests {
     use crate::eval::Hce;
     use crate::movegen::find_uci_move;
 
+    /// The stop flag and a small table for one test.
+    struct Env {
+        stop: AtomicBool,
+        tt: TranspositionTable,
+    }
+
+    impl Env {
+        fn new() -> Env {
+            Env {
+                stop: AtomicBool::new(false),
+                tt: TranspositionTable::new(1),
+            }
+        }
+
+        fn shared(&self) -> Shared<'_> {
+            Shared {
+                stop: &self.stop,
+                tt: &self.tt,
+            }
+        }
+    }
+
     fn search_fen(fen: &str, limits: &Limits) -> (Outcome, ThreadData<Hce>) {
         let (pos, ci) = Position::from_fen(fen).unwrap();
         let mut td = ThreadData::new(Hce);
         td.set_position(&pos, &ci, &[]);
-        let outcome = td.search(&Shared::default(), limits, 0, |_| {});
+        let outcome = td.search(Env::new().shared(), limits, 0, |_| {});
         (outcome, td)
     }
 
@@ -612,7 +736,7 @@ mod tests {
         assert!(outcome.score > 300);
     }
 
-    fn worker<'a>(td: &'a mut ThreadData<Hce>, shared: &'a Shared) -> Worker<'a, Hce> {
+    fn worker<'a>(td: &'a mut ThreadData<Hce>, shared: Shared<'a>) -> Worker<'a, Hce> {
         Worker {
             td,
             shared,
@@ -645,8 +769,8 @@ mod tests {
         let (pos, ci) = Position::startpos();
         let mut td = ThreadData::new(Hce);
         td.set_position(&pos, &ci, &[]);
-        let shared = Shared::default();
-        let mut worker = worker(&mut td, &shared);
+        let env = Env::new();
+        let mut worker = worker(&mut td, env.shared());
         for (ply, text) in ["g1f3", "g8f6", "f3g1", "f6g8"].into_iter().enumerate() {
             assert!(!worker.is_draw(ply), "ply {ply}");
             let mv = find_uci_move(&worker.td.positions[ply], &ci, text).unwrap();
@@ -660,18 +784,18 @@ mod tests {
 
     #[test]
     fn repetition_before_the_root_needs_two_occurrences() {
-        let shared = Shared::default();
+        let env = Env::new();
 
         // The start position has occurred once before: not yet a draw.
         let (pos, ci, history) = shuffle(1);
         let mut td = ThreadData::new(Hce);
         td.set_position(&pos, &ci, &history);
-        assert!(!worker(&mut td, &shared).is_draw(0));
+        assert!(!worker(&mut td, env.shared()).is_draw(0));
 
         // It has occurred twice before: this is the third time.
         let (pos, ci, history) = shuffle(2);
         td.set_position(&pos, &ci, &history);
-        assert!(worker(&mut td, &shared).is_draw(0));
+        assert!(worker(&mut td, env.shared()).is_draw(0));
     }
 
     #[test]
@@ -689,12 +813,8 @@ mod tests {
         }
         let mut td = ThreadData::new(Hce);
         td.set_position(&pos, &ci, &history);
-        let outcome = td.search(&shared_default(), &Limits::depth(3), 0, |_| {});
+        let outcome = td.search(Env::new().shared(), &Limits::depth(3), 0, |_| {});
         assert!(outcome.score > 300, "{}", outcome.score);
-    }
-
-    fn shared_default() -> Shared {
-        Shared::default()
     }
 
     #[test]
@@ -721,9 +841,9 @@ mod tests {
         let (pos, ci) = Position::startpos();
         let mut td = ThreadData::new(Hce);
         td.set_position(&pos, &ci, &[]);
-        let shared = Shared::default();
-        shared.stop.store(true, Ordering::Relaxed);
-        let outcome = td.search(&shared, &Limits::default(), 0, |_| {});
+        let env = Env::new();
+        env.stop.store(true, Ordering::Relaxed);
+        let outcome = td.search(env.shared(), &Limits::default(), 0, |_| {});
         assert!(outcome.best.is_some());
         assert_eq!(outcome.depth, 1);
     }
@@ -735,7 +855,7 @@ mod tests {
         let mut td = ThreadData::new(Hce);
         td.set_position(&pos, &ci, &[]);
         let mut depths = Vec::new();
-        td.search(&Shared::default(), &Limits::depth(4), 0, |report| {
+        td.search(Env::new().shared(), &Limits::depth(4), 0, |report| {
             depths.push(report.depth);
             assert!(!report.pv.is_empty());
             let mut line = pos.clone();
