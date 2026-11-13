@@ -8,7 +8,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use crate::eval::Evaluator;
-use crate::movegen::{MoveList, ScoredMove, gen_all, gen_evasions, gen_noisy};
+use crate::movegen::{MoveList, gen_all};
+use crate::movepick::MovePicker;
 use crate::time::{Limits, TimeBudget};
 use crate::tt::{Bound, NO_EVAL, TranspositionTable, TtEntry, from_tt, to_tt};
 use crate::{CastlingInfo, Move, PieceType, Position};
@@ -244,50 +245,6 @@ struct Worker<'a, E: Evaluator> {
     root_best: Option<Move>,
 }
 
-/// Value of the piece a capture removes, most valuable first, then cheapest attacker.
-fn capture_score(pos: &Position, mv: Move) -> i32 {
-    let victim = if mv.is_en_passant() {
-        PieceType::Pawn
-    } else {
-        pos.piece_on(mv.to())
-            .map_or(PieceType::Pawn, |piece| piece.piece_type())
-    };
-    let attacker = pos
-        .piece_on(mv.from())
-        .map_or(PieceType::Pawn, |piece| piece.piece_type());
-    16 * (victim.index() as i32 + 1) - attacker.index() as i32
-}
-
-/// Scores `list` for ordering and sorts it best first. The sort is a stable insertion
-/// sort so that equal scores keep generation order on every platform.
-fn order_moves(pos: &Position, list: &mut MoveList, first: Option<Move>) {
-    let moves = list.as_mut_slice();
-    for scored in moves.iter_mut() {
-        let mv = scored.mv;
-        scored.score = if Some(mv) == first {
-            1 << 20
-        } else {
-            let mut score = 0;
-            if mv.is_capture() {
-                score += 1_000 + capture_score(pos, mv);
-            }
-            if let Some(promotion) = mv.promotion() {
-                score += 100 * (promotion.index() as i32 + 1);
-            }
-            score
-        };
-    }
-    for i in 1..moves.len() {
-        let current: ScoredMove = moves[i];
-        let mut j = i;
-        while j > 0 && moves[j - 1].score < current.score {
-            moves[j] = moves[j - 1];
-            j -= 1;
-        }
-        moves[j] = current;
-    }
-}
-
 impl<E: Evaluator> Worker<'_, E> {
     fn legal_root_moves(&self) -> usize {
         let pos = &self.td.positions[0];
@@ -424,24 +381,17 @@ impl<E: Evaluator> Worker<'_, E> {
             }
         }
 
-        let mut list = MoveList::new();
-        gen_all(&self.td.positions[ply], &self.td.castling, &mut list);
-        order_moves(
-            &self.td.positions[ply],
-            &mut list,
-            if root {
-                self.root_best.or(tt_move)
-            } else {
-                tt_move
-            },
-        );
+        if root {
+            // The last iteration's choice is at least as good a guide as the table.
+            tt_move = self.root_best.or(tt_move);
+        }
+        let mut picker = MovePicker::new(&self.td.positions[ply], &self.td.castling, tt_move);
 
         let old_alpha = alpha;
         let mut best = -INFINITY;
         let mut best_move = None;
         let mut legal = 0;
-        for i in 0..list.len() {
-            let mv = list.as_slice()[i].mv;
+        while let Some(mv) = picker.next(&self.td.positions[ply], &self.td.castling) {
             if !self.td.positions[ply].is_legal(mv, &self.td.castling) {
                 continue;
             }
@@ -545,17 +495,16 @@ impl<E: Evaluator> Worker<'_, E> {
             alpha = alpha.max(best);
         }
 
-        let mut list = MoveList::new();
-        if in_check {
-            gen_evasions(&self.td.positions[ply], &mut list);
-        } else {
-            gen_noisy(&self.td.positions[ply], &mut list);
-        }
-        order_moves(&self.td.positions[ply], &mut list, tt_move);
+        let mut picker =
+            MovePicker::quiescence(&self.td.positions[ply], &self.td.castling, tt_move);
 
         let mut legal = 0;
-        for i in 0..list.len() {
-            let mv = list.as_slice()[i].mv;
+        while let Some(mv) = picker.next(&self.td.positions[ply], &self.td.castling) {
+            // A capture that loses material will not rescue a position that standing
+            // pat does not.
+            if !in_check && !self.td.positions[ply].see_ge(mv, 0) {
+                continue;
+            }
             if !self.td.positions[ply].is_legal(mv, &self.td.castling) {
                 continue;
             }
