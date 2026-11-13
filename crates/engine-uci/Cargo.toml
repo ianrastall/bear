@@ -1,0 +1,16 @@
+[package]
+name = "bear-uci"
+description = "The Bear chess engine: UCI protocol front end"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "bear"
+path = "src/main.rs"
+
+[lints]
+workspace = true
