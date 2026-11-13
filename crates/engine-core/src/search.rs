@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 
 use crate::eval::Evaluator;
 use crate::movegen::{MoveList, gen_all};
-use crate::movepick::MovePicker;
+use crate::movepick::{MovePicker, Refutations, is_noisy};
 use crate::time::{Limits, TimeBudget};
 use crate::tt::{Bound, NO_EVAL, TranspositionTable, TtEntry, from_tt, to_tt};
 use crate::{CastlingInfo, Move, PieceType, Position};
@@ -97,6 +97,8 @@ pub struct ThreadData<E: Evaluator> {
     /// The position at each ply of the current line; index 0 is the root.
     positions: Box<[Position]>,
     pv: Box<[PvLine]>,
+    /// For each ply, the last two quiet moves that caused a cutoff there.
+    killers: Box<[Refutations]>,
     /// Keys of every position from the start of the game to the current node.
     keys: Vec<u64>,
     castling: CastlingInfo,
@@ -110,6 +112,7 @@ impl<E: Evaluator> ThreadData<E> {
             eval,
             positions: vec![start; MAX_PLY + 1].into_boxed_slice(),
             pv: vec![PvLine::EMPTY; MAX_PLY + 2].into_boxed_slice(),
+            killers: vec![[None; 2]; MAX_PLY + 1].into_boxed_slice(),
             keys,
             castling,
         }
@@ -145,6 +148,8 @@ impl<E: Evaluator> ThreadData<E> {
         let budget = TimeBudget::new(limits, stm, overhead_ms);
         // Room for the deepest line plus this search's own pushes.
         self.keys.reserve(MAX_PLY + 1);
+        // Killers belong to one tree; the next search starts a different one.
+        self.killers.fill([None; 2]);
 
         let mut worker = Worker {
             td: self,
@@ -385,7 +390,12 @@ impl<E: Evaluator> Worker<'_, E> {
             // The last iteration's choice is at least as good a guide as the table.
             tt_move = self.root_best.or(tt_move);
         }
-        let mut picker = MovePicker::new(&self.td.positions[ply], &self.td.castling, tt_move);
+        let mut picker = MovePicker::new(
+            &self.td.positions[ply],
+            &self.td.castling,
+            tt_move,
+            self.td.killers[ply],
+        );
 
         let old_alpha = alpha;
         let mut best = -INFINITY;
@@ -412,6 +422,9 @@ impl<E: Evaluator> Worker<'_, E> {
                     let (line, rest) = self.td.pv.split_at_mut(ply + 1);
                     line[ply].set(mv, &rest[0]);
                     if score >= beta {
+                        if !is_noisy(mv) {
+                            self.remember_cutoff(ply, mv);
+                        }
                         break;
                     }
                 }
@@ -542,6 +555,16 @@ impl<E: Evaluator> Worker<'_, E> {
         };
         self.store_quiescence(key, best_move, best, static_eval, bound, ply);
         best
+    }
+
+    /// Notes that the quiet move `mv` refuted the position at `ply`, to try it early
+    /// in the positions searched next at the same ply.
+    fn remember_cutoff(&mut self, ply: usize, mv: Move) {
+        let killers = &mut self.td.killers[ply];
+        if killers[0] != Some(mv) {
+            killers[1] = killers[0];
+            killers[0] = Some(mv);
+        }
     }
 
     fn store_quiescence(

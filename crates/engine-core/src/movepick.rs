@@ -2,7 +2,8 @@
 //! kind only when the kinds before it have not already produced a cutoff.
 //!
 //! Not in check, the order is: the transposition-table move, captures and queen
-//! promotions that do not lose material, quiet moves, then the losing captures.
+//! promotions that do not lose material, the killer moves, the other quiet moves, then
+//! the losing captures.
 //! In check every evasion comes from one list. Moves are pseudo-legal; the caller
 //! checks legality.
 
@@ -14,6 +15,7 @@ enum Stage {
     TtMove,
     GenNoisy,
     GoodNoisy,
+    Refutations,
     GenQuiet,
     Quiet,
     BadNoisy,
@@ -22,9 +24,21 @@ enum Stage {
     Done,
 }
 
+/// Quiet moves tried before the rest because they refuted a sibling position.
+pub type Refutations = [Option<Move>; 2];
+
+/// Captures and queen promotions: the moves of the first generation stage.
+#[inline]
+pub fn is_noisy(mv: Move) -> bool {
+    mv.is_capture() || mv.promotion() == Some(PieceType::Queen)
+}
+
 pub struct MovePicker {
     stage: Stage,
     tt_move: Option<Move>,
+    refutations: Refutations,
+    /// The next refutation to try.
+    refutation: usize,
     /// Only captures and queen promotions, for the quiescence search.
     noisy_only: bool,
     list: MoveList,
@@ -70,11 +84,24 @@ fn sort(moves: &mut [ScoredMove]) {
 }
 
 impl MovePicker {
-    /// Every move, for the main search. `tt_move` need not be playable here.
-    pub fn new(pos: &Position, ci: &CastlingInfo, tt_move: Option<Move>) -> MovePicker {
+    /// Every move, for the main search. Neither `tt_move` nor the refutations need be
+    /// playable here.
+    pub fn new(
+        pos: &Position,
+        ci: &CastlingInfo,
+        tt_move: Option<Move>,
+        refutations: Refutations,
+    ) -> MovePicker {
         MovePicker {
             stage: Stage::TtMove,
             tt_move: tt_move.filter(|&mv| pos.is_pseudo_legal(mv, ci)),
+            // In check there is no quiet stage for them to come before.
+            refutations: if pos.in_check() {
+                [None; 2]
+            } else {
+                refutations
+            },
+            refutation: 0,
             noisy_only: false,
             list: MoveList::new(),
             index: 0,
@@ -91,6 +118,8 @@ impl MovePicker {
         MovePicker {
             stage: Stage::TtMove,
             tt_move: tt_move.filter(|&mv| wanted(mv) && pos.is_pseudo_legal(mv, ci)),
+            refutations: [None; 2],
+            refutation: 0,
             noisy_only: true,
             list: MoveList::new(),
             index: 0,
@@ -125,7 +154,7 @@ impl MovePicker {
                         self.stage = if self.noisy_only {
                             Stage::Done
                         } else {
-                            Stage::GenQuiet
+                            Stage::Refutations
                         };
                         continue;
                     };
@@ -140,6 +169,26 @@ impl MovePicker {
                         continue;
                     }
                     return Some(mv);
+                }
+                Stage::Refutations => {
+                    let Some(&candidate) = self.refutations.get(self.refutation) else {
+                        self.stage = Stage::GenQuiet;
+                        continue;
+                    };
+                    let i = self.refutation;
+                    self.refutation += 1;
+                    // A refutation that cannot be played here is dropped, so that the
+                    // quiet stage does not pass over a real move that looks like it.
+                    let playable = candidate.filter(|&mv| {
+                        Some(mv) != self.tt_move
+                            && !self.refutations[..i].contains(&Some(mv))
+                            && !is_noisy(mv)
+                            && pos.is_pseudo_legal(mv, ci)
+                    });
+                    self.refutations[i] = playable;
+                    if playable.is_some() {
+                        return playable;
+                    }
                 }
                 Stage::GenQuiet => {
                     self.index = self.list.len();
@@ -199,14 +248,14 @@ impl MovePicker {
         Some(moves[self.index - 1].mv)
     }
 
-    /// The next move before `end` in list order, passing over the table move, which
-    /// has already been tried.
+    /// The next move before `end` in list order, passing over the table move and the
+    /// refutations, which have already been tried.
     fn next_in_order(&mut self, end: usize) -> Option<Move> {
         let moves = self.list.as_slice();
         while self.index < end {
             let mv = moves[self.index].mv;
             self.index += 1;
-            if Some(mv) != self.tt_move {
+            if Some(mv) != self.tt_move && !self.refutations.contains(&Some(mv)) {
                 return Some(mv);
             }
         }
@@ -245,12 +294,20 @@ mod tests {
             // table moves that are not playable here.
             let mut hints: Vec<Option<Move>> = vec![None, Move::from_raw(0x1234)];
             hints.extend(all.iter().step_by(5).map(Some));
+            // Refutations taken from this position's moves and from elsewhere,
+            // sometimes equal to the table move or to each other.
+            let mut refutations: Vec<Refutations> = vec![[None; 2], [Move::from_raw(0x0ABC); 2]];
+            for (i, mv) in all.iter().enumerate().step_by(4) {
+                refutations.push([Some(mv), all.iter().nth(i / 2)]);
+            }
             for hint in hints {
-                let moves = drain(MovePicker::new(pos, ci, hint), pos, ci);
-                if let Some(mv) = hint.filter(|&mv| all.contains(mv)) {
-                    assert_eq!(moves[0], mv, "{}", pos.fen(ci));
+                for &pair in &refutations {
+                    let moves = drain(MovePicker::new(pos, ci, hint, pair), pos, ci);
+                    if let Some(mv) = hint.filter(|&mv| all.contains(mv)) {
+                        assert_eq!(moves[0], mv, "{}", pos.fen(ci));
+                    }
+                    assert_eq!(sorted(moves), expected, "{} {hint:?} {pair:?}", pos.fen(ci));
                 }
-                assert_eq!(sorted(moves), expected, "{} {hint:?}", pos.fen(ci));
             }
             positions += 1;
         });
@@ -282,7 +339,7 @@ mod tests {
         // White can win a pawn with the knight, lose the queen for a pawn, or promote.
         let fen = "4k3/1P6/2p5/3p4/8/4N3/8/3QK3 w - - 0 1";
         let (pos, ci) = Position::from_fen(fen).unwrap();
-        let moves = drain(MovePicker::new(&pos, &ci, None), &pos, &ci);
+        let moves = drain(MovePicker::new(&pos, &ci, None, [None; 2]), &pos, &ci);
         let text: Vec<String> = moves.iter().map(|mv| mv.uci(false).to_string()).collect();
         // The promotion and nothing else is a winning noisy move.
         assert_eq!(text[0], "b7b8q");
@@ -296,8 +353,22 @@ mod tests {
             .iter()
             .copied()
             .find(|mv| mv.uci(false).to_string() == "d1d5");
-        let with_hint = drain(MovePicker::new(&pos, &ci, hint), &pos, &ci);
+        let with_hint = drain(MovePicker::new(&pos, &ci, hint, [None; 2]), &pos, &ci);
         assert_eq!(with_hint[0], hint.unwrap());
         assert_eq!(with_hint.len(), moves.len());
+
+        // Killers come straight after the promotion, in their own order, and a
+        // capture offered as a killer is not moved up.
+        let find = |text: &str| {
+            moves
+                .iter()
+                .copied()
+                .find(|mv| mv.uci(false).to_string() == text)
+        };
+        let killers = [find("e1f2"), find("e3d5")];
+        let with_killers = drain(MovePicker::new(&pos, &ci, None, killers), &pos, &ci);
+        assert_eq!(with_killers[1], killers[0].unwrap());
+        assert_eq!(with_killers[with_killers.len() - 2], killers[1].unwrap());
+        assert_eq!(with_killers.len(), moves.len());
     }
 }
