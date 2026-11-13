@@ -1,10 +1,10 @@
-//! Forced mates that the search must find at a fixed depth.
+//! Forced mates that the search must find within a fixed number of nodes.
 //!
-//! A search that prunes does not see a mate at the first depth that reaches it, so the
-//! depth allows some plies beyond the mate. What it reports must be a mate, and never
-//! a shorter one than exists.
+//! A search that prunes reaches great nominal depths on few nodes when one side is
+//! winning, so depth says little about the work done; the node count does. What the
+//! search reports must be a mate, and never a shorter one than exists.
 
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use bear_core::Position;
 use bear_core::eval::Hce;
@@ -14,25 +14,32 @@ use bear_core::tt::TranspositionTable;
 
 const SUITE: &str = include_str!("mates.epd");
 
-/// Plies searched beyond the mating move. `BEAR_MATES_EXTRA` overrides it, to find out
-/// how much a change to the search needs.
-const EXTRA_PLIES: i32 = 10;
+/// Nodes allowed for each position. `BEAR_MATES_NODES` overrides it, and
+/// `BEAR_MATES_VERBOSE` prints what each position needed, to find out how a change to
+/// the search affects the suite.
+const NODE_BUDGET: u64 = 5_000_000;
 
-/// Searches every position of the suite with a mate in at most `longest` moves to
-/// depth 2k - 1 + EXTRA_PLIES and returns how many it tried.
+/// Searches every position of the suite with a mate in at most `longest` moves until
+/// a mate is reported or the budget runs out, and returns how many it tried.
 fn solve(longest: i32) -> usize {
+    let budget = std::env::var("BEAR_MATES_NODES")
+        .ok()
+        .and_then(|nodes| nodes.parse().ok())
+        .unwrap_or(NODE_BUDGET);
+    let verbose = std::env::var_os("BEAR_MATES_VERBOSE").is_some();
+    let limits = Limits {
+        nodes: Some(budget),
+        ..Limits::default()
+    };
     let stop = AtomicBool::new(false);
     let tt = TranspositionTable::new(16);
     let shared = Shared {
         stop: &stop,
         tt: &tt,
     };
+
     let mut tried = 0;
     let mut failures = Vec::new();
-    let extra = std::env::var("BEAR_MATES_EXTRA")
-        .ok()
-        .and_then(|plies| plies.parse().ok())
-        .unwrap_or(EXTRA_PLIES);
     for line in SUITE.lines() {
         let line = line.trim();
         if line.is_empty() || line.starts_with('#') {
@@ -51,23 +58,26 @@ fn solve(longest: i32) -> usize {
         let mut td = ThreadData::new(Hce);
         td.set_position(&pos, &ci, &[]);
         tt.clear();
-        let depth = 2 * moves - 1 + extra;
-        let outcome = td.search(shared, &Limits::depth(depth), 0, |_| {});
-        let found = mate_in(outcome.score);
+        stop.store(false, Ordering::Relaxed);
+
+        // The first iteration that reports a mate ends the search.
+        let mut found = None;
+        td.search(shared, &limits, 0, |report| {
+            if let Some(mate) = mate_in(report.score) {
+                found = Some((mate, report.depth, report.nodes));
+                stop.store(true, Ordering::Relaxed);
+            }
+        });
+        if verbose {
+            println!("{found:?}: {line}");
+        }
         // A mate, and not a shorter one than exists.
-        if !found.is_some_and(|m| m >= moves) {
-            failures.push(format!("{line}: found {found:?} at depth {depth}"));
+        if !found.is_some_and(|(mate, _, _)| mate >= moves) {
+            failures.push(format!("{line}: found {found:?} within {budget} nodes"));
         }
         tried += 1;
     }
-    assert!(
-        failures.is_empty(),
-        "{}",
-        failures.join(
-            "
-"
-        )
-    );
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
     tried
 }
 
