@@ -6,7 +6,7 @@ The design is in [docs/architecture.md](docs/architecture.md): board representat
 
 ## Status
 
-Milestone M2 (playable engine). Bear plays complete games of standard chess and Chess960 through any UCI interface. The search is a plain alpha-beta with quiescence and the evaluation is material and piece-square tables, so it is weak; transposition table, move ordering and pruning arrive in M3 and M4.
+Milestone M4 (selectivity) is in progress. Bear plays complete games of standard chess and Chess960 through any UCI interface. The search has a transposition table, staged move ordering and the usual pruning and reductions; the evaluation is still material and piece-square tables, so it is far from its target strength.
 
 ## Building
 
@@ -62,7 +62,7 @@ cargo xtask sprt --base <revision or engine file> [--new <engine file>] [--bound
 
 `datagen openings` writes balanced random opening positions for test matches. `books/bear-8ply.epd` was made with `--count 2000 --seed 2026`.
 
-`datagen mates` collects positions with a short forced mate from Bear's own games. `crates/engine-core/tests/mates.epd` holds 36 of them; the release-mode test searches each to the shallowest depth that can see the mate.
+`datagen mates` collects positions with a short forced mate from Bear's own games. `crates/engine-core/tests/mates.epd` holds 36 of them, and the release-mode test requires the search to find every one.
 
 `cargo xtask sprt` plays the working tree (or `--new`) against an earlier revision with fastchess until a sequential probability ratio test accepts or rejects the change. fastchess is found through `--fastchess`, the `FASTCHESS` environment variable or the path.
 

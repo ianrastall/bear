@@ -263,32 +263,37 @@ A move is noisy if it captures or promotes to a queen. Promotions to less than a
 ```rust
 pub struct MovePicker {
     stage: Stage,
-    tt_move: Option<Move>, killers: [Option<Move>; 2], counter: Option<Move>,
+    tt_move: Option<Move>,
+    refutations: Refutations,          // killers (and later the countermove), validated when reached
+    refutation: usize,
+    noisy_only: bool,                  // quiescence
     list: MoveList,                    // 256 × 8 B
-    cur: usize, end: usize, bad_end: usize,   // bad captures are compacted to list[0..bad_end]
-    see_margin: i32, skip_quiets: bool,
+    index: usize, bad: usize,          // losing captures are compacted to list[..bad]
 }
 enum Stage {
-    TtMove, GenNoisy, GoodNoisy, Killer1, Killer2, Counter, GenQuiet, Quiet, BadNoisy,   // main search
-    EvTt, EvGen, Evasion,                                                                 // in check
-    QsTt, QsGen, QsNoisy,                                                                 // quiescence
+    TtMove, GenNoisy, GoodNoisy, Refutations, GenQuiet, Quiet, BadNoisy,   // not in check
+    GenEvasions, Evasions,                                                  // in check
     Done,
 }
 impl MovePicker {
-    pub fn next(&mut self, pos: &Position, h: &History, ss: &StackView) -> Option<Move>;
-    pub fn skip_quiets(&mut self);     // late move pruning: jump to BadNoisy
+    pub fn new(pos, ci, tt_move, refutations) -> MovePicker;       // main search
+    pub fn quiescence(pos, ci, tt_move) -> MovePicker;             // noisy moves, or evasions in check
+    pub fn next(&mut self, pos: &Position, ci: &CastlingInfo /*, history */) -> Option<Move>;
 }
 ```
 
-It is deliberately not an `Iterator`. `next` borrows position and history only for the call, so the recursive search can take `&mut ThreadData` in between.
+It is deliberately not an `Iterator`. `next` borrows the position (and, once it is used, the history) only for the call, so the recursive search can take `&mut ThreadData` in between. `skip_quiets()` for late move pruning is added in M4 with the pruning that calls it.
 
 Stage behaviour:
 
-- **TtMove:** yield if `is_pseudo_legal`. No generation.
-- **GoodNoisy:** score each capture as `16 · value[victim] + capture_history`. Before capture history exists, the tie-break is least valuable attacker. Selection-sort one move at a time. A move failing `see_ge(mv, -score / 32)` is swapped into the bad-capture region.
-- **Killer1/2, Counter:** yield if quiet, pseudo-legal and not already yielded.
-- **Quiet:** generate, score from the history tables, partially insertion-sort entries above `-3500 · depth`, and yield, skipping the TT move, killers and countermove.
+- **TtMove:** yield if `is_pseudo_legal`. No generation. The quiescence picker also requires the move to be a capture or queen promotion unless in check.
+- **GoodNoisy:** score each capture by victim, then least valuable attacker; capture history replaces the tie-break in M5. Selection-sort one move at a time. In the main search a move failing `see_ge(mv, 0)` is moved into the bad-capture region; the quiescence picker hands out every noisy move and the search applies its own exchange test.
+- **Refutations:** yield each if it is quiet, pseudo-legal and not already yielded. One that is not playable here is dropped, so the quiet stage cannot skip a real move that looks like it.
+- **Quiet:** generate and yield, skipping the TT move and the refutations. With history, the stage is scored and insertion-sorted first.
 - **BadNoisy:** yield the deferred captures in their existing order.
+- **Evasions:** one list, captures and promotions first.
+
+Sorts are stable and selection takes the first of equals, so the node count does not depend on the platform.
 
 ---
 
@@ -381,7 +386,8 @@ fn cluster(&self, key: u64) -> &Cluster {      // Lemire range reduction: any si
 
 **Allocation and resizing.**
 
-- One contiguous `alloc_zeroed` with 2 MiB alignment, requested as huge pages where available (`MADV_HUGEPAGE`; `VirtualAlloc(MEM_LARGE_PAGES)` with fallback).
+- Until M6 the table is a boxed slice of clusters, allocated with `try_reserve_exact` so that a request too large for the machine falls back to half the size and reports it instead of aborting. No `unsafe` is involved.
+- From M6: one contiguous `alloc_zeroed` with 2 MiB alignment, requested as huge pages where available (`MADV_HUGEPAGE`; `VirtualAlloc(MEM_LARGE_PAGES)` with fallback).
 - On `setoption Hash`, the old table is freed before the new one is allocated. Peak memory is never doubled and nothing is allocated per entry.
 - Clearing on `ucinewgame` is chunked across `Threads` scoped threads.
 - `hashfull` samples the first 250 clusters for current-generation entries.
@@ -743,9 +749,10 @@ Bear reproduces every count in this table, and Stockfish 18 reports the same tot
 
 **SEE.**
 
-- A hand-verified EPD of at least 50 cases: x-rays, batteries, promotions, en passant, king participation.
-- A property test against a brute-force single-square exchange minimax on random positions.
-- A monotonicity property: `see_ge(m, t)` implies `see_ge(m, t − 1)`.
+- `crates/engine-core/src/see/cases.epd`: 58 cases worked out by hand, covering x-rays, batteries, promotions, en passant, king participation and moves that capture nothing.
+- A property test against a recursive single-square exchange on every pseudo-legal move of random positions (more than 50,000 moves): `see_ge(m, t)` must equal `exact(m) ≥ t` at the exact value, one above it, and every multiple of 100 from −1300 to 1300. That includes monotonicity in `t`.
+
+**Mates.** `crates/engine-core/tests/mates.epd` holds 36 positions with a forced mate in two, three or four moves, twelve of each, made by `datagen mates` from Bear's own games. Stockfish 18 reports the same distance for each when asked with `go mate k` (executed only). The release-mode test gives the search a fixed effort on each and requires it to report a mate no shorter than `k`. Without pruning that effort was depth `2k − 1`, where the mate is the last ply; a pruning search needs more.
 
 **Debug-build assertions**, live during the perft suite and a depth-limited bench:
 
@@ -763,11 +770,13 @@ Bear reproduces every count in this table, and Stockfish 18 reports the same tot
 - CI runs it on Linux and Windows and fails if it differs from the commit message, which also proves the two platforms agree. SIMD tiers are added to that check in M8.
 - A commit claiming no functional change must leave it unchanged.
 
-**SPRT** runs through `cargo xtask sprt --base <rev> --bounds gain`, which wraps:
+**SPRT** runs through `cargo xtask sprt --base <revision or engine file> [--new <engine file>] [--bounds early|standard|late|regress]`. It builds the working tree as `new` unless given one, exports and builds the base revision once, and runs:
 
 ```bash
-fastchess -engine cmd=new/bear name=new -engine cmd=base/bear name=base -each tc=8+0.08 proto=uci option.Hash=16 option.Threads=1 -openings file=books/bear-8ply.epd format=epd order=random -rounds 20000 -games 2 -repeat -concurrency 14 -recover -sprt elo0=0 elo1=5 alpha=0.05 beta=0.05 -pgnout file=sprt.pgn
+fastchess -engine cmd=new/bear name=new -engine cmd=base/bear name=base -each tc=8+0.08 proto=uci option.Hash=16 -openings file=books/bear-8ply.epd format=epd order=random -rounds 20000 -games 2 -repeat -recover -concurrency 7 -sprt elo0=0 elo1=10 alpha=0.05 beta=0.05 -pgnout file=sprt.pgn
 ```
+
+The default concurrency is one less than half the logical processors, which leaves the games a physical core each. `option.Threads` joins the command in M6.
 
 | Purpose | Bounds | When |
 |---|---|---|
@@ -808,5 +817,25 @@ Killers, countermoves and the check extension get `[−5, 0]` removal tests duri
 ### 7.4 Milestone results
 
 Perft and fuzzing results for M1 are in 7.1.
+
+**M3.** Every test is `cargo xtask sprt` at 8+0.08 with fastchess 1.8.2, each step against the one before it. No game in any of them ended by a crash, an illegal move or a time loss.
+
+| Step | Bounds | Games | Elo | Outcome |
+|---|---|---|---|---|
+| Transposition table, `Hash` option | `[0, 10]` | 234 | +175 ± 44 | Passed |
+| SEE and the staged move picker, with losing captures skipped in quiescence | `[0, 10]` | 674 | +48 ± 21 | Passed |
+| Killer moves | `[0, 10]` | 534 | +58 ± 23 | Passed |
+| PVS and aspiration windows as one step, on the transposition table alone | `[0, 10]` | 2,762 | −6 ± 10 | Failed |
+| PVS alone | `[−5, 0]` | 2,054 | +24 ± 11 | Passed |
+| History ordering | `[0, 10]` | 278 | +2.5 ± 37 | Stopped; passed in M4 |
+
+Where M3 departs from its row in the roadmap:
+
+- **PVS** was admitted on non-regression bounds. Alone it saves about 5% of the nodes at fixed depth, too little to settle a `[0, 10]` test in reasonable time, and the pruning of M4 needs the distinction it draws between nodes on and off the principal variation.
+- **Aspiration windows** are not in. The failed combined step owed nearly all of its node saving to searching a ply shallower after a fail high, which is a shallower search and not a saving. Without that reduction the windows change the node count at fixed depth by 0.2%. They are to be tried again once the search reaches greater depths.
+- **History ordering** saved 2% of the nodes on its own and its test was stopped undecided. It went in during M4 on top of late move reductions, which it also steers, and passed there at +175 ± 42.
+- **Countermoves** did not reduce the node count at fixed depth (+0.3%) and were not tested. They are to be tried again on the M4 search.
+
+Bench at the end of M3 is 2,477,934 nodes at depth 6. SEE passes its 58 hand-worked cases and the comparison with an exhaustive exchange. All 36 mates of the suite were found at depth `2k − 1`, the first depth that can see them.
 
 **M2.** Bench 22,808,147 nodes on Linux and Windows. The self-play run was 2,000 games at 8+0.08 between two copies of commit `fb26e67`, played by fastchess 1.8.2 seven at a time, each of the first 1,000 positions of `books/bear-8ply.epd` with both colours. All 2,000 games ended by the rules of chess (1,580 decisive, 420 drawn); there was no crash, illegal move or time loss.
