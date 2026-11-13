@@ -230,6 +230,7 @@ impl<E: Evaluator> ThreadData<E> {
             can_stop: false,
             root_best: None,
             nmp_min_ply: 0,
+            root_depth: 0,
         };
 
         let root_moves = worker.legal_root_moves();
@@ -256,6 +257,7 @@ impl<E: Evaluator> ThreadData<E> {
         let mut pv = Vec::with_capacity(MAX_PLY);
         for depth in 1..=max_depth {
             worker.seldepth = 0;
+            worker.root_depth = depth;
             let score = worker.alpha_beta(0, -INFINITY, INFINITY, depth, false);
             if worker.stopped {
                 break;
@@ -319,6 +321,8 @@ struct Worker<'a, E: Evaluator> {
     /// While a null-move cutoff is being verified, null moves are not tried above
     /// this ply.
     nmp_min_ply: usize,
+    /// Depth of the iteration in progress.
+    root_depth: i32,
 }
 
 impl<E: Evaluator> Worker<'_, E> {
@@ -646,8 +650,17 @@ impl<E: Evaluator> Worker<'_, E> {
             };
 
             self.make(ply, mv);
-            let new_depth = depth - 1;
             let gives_check = self.td.positions[ply + 1].in_check();
+            // A check that does not lose material is followed a ply further. The
+            // limit on ply keeps a run of checks from extending without end.
+            let mut extension = 0;
+            if gives_check
+                && ply < 2 * self.root_depth as usize
+                && self.td.positions[ply].see_ge(mv, 0)
+            {
+                extension = 1;
+            }
+            let new_depth = depth - 1 + extension;
 
             // The first move is expected to be best. The others only have to be shown
             // not to beat it, which a window of one point does; one that does beat it
@@ -1026,6 +1039,7 @@ mod tests {
             can_stop: false,
             root_best: None,
             nmp_min_ply: 0,
+            root_depth: 0,
         }
     }
 
