@@ -587,6 +587,13 @@ impl<E: Evaluator> Worker<'_, E> {
         // Quiet moves searched without causing a cutoff.
         let mut quiets = [None; MAX_QUIETS];
         let mut quiet_count = 0;
+        // Quiet moves the picker has produced, searched or not.
+        let mut quiets_seen = 0;
+        // Moves may be left unsearched only once something has been found that does
+        // not lose by force, and not in pawn endings, where the one move that
+        // matters is easily a late one.
+        let stm = self.td.positions[ply].stm();
+        let may_prune = !root && self.td.positions[ply].has_non_pawn_material(stm);
         while let Some(mv) =
             picker.next(&self.td.positions[ply], &self.td.castling, &self.td.history)
         {
@@ -594,6 +601,18 @@ impl<E: Evaluator> Worker<'_, E> {
                 continue;
             }
             legal += 1;
+            let quiet = !is_noisy(mv);
+            quiets_seen += quiet as i32;
+
+            if may_prune && best > -MATE_BOUND && quiet {
+                // Late move pruning: after enough quiet moves at low depth the rest
+                // are not searched at all.
+                if quiets_seen >= (3 + depth * depth) / (2 - improving as i32) {
+                    picker.skip_quiets();
+                    continue;
+                }
+            }
+
             let history_score = if is_noisy(mv) {
                 0
             } else {
@@ -912,8 +931,9 @@ mod tests {
     #[test]
     #[cfg_attr(miri, ignore)]
     fn finds_mate_in_two() {
-        // Two rooks walk the king down: 1. Ra7 Kg8 (or any) 2. Rb8#.
-        let (outcome, _) = search_fen("7k/8/8/8/8/8/R7/1R4K1 w - - 0 1", &Limits::depth(4));
+        // Two rooks walk the king down: 1. Ra7 Kg8 (or any) 2. Rb8#. The search prunes,
+        // so it needs some plies beyond the mate to be sure of it.
+        let (outcome, _) = search_fen("7k/8/8/8/8/8/R7/1R4K1 w - - 0 1", &Limits::depth(10));
         assert_eq!(mate_in(outcome.score), Some(2));
     }
 
@@ -921,7 +941,7 @@ mod tests {
     #[cfg_attr(miri, ignore)]
     fn sees_being_mated() {
         // Black to move is mated next move whatever it plays.
-        let (outcome, _) = search_fen("6k1/R7/1R6/8/8/8/8/6K1 b - - 0 1", &Limits::depth(3));
+        let (outcome, _) = search_fen("6k1/R7/1R6/8/8/8/8/6K1 b - - 0 1", &Limits::depth(9));
         assert_eq!(mate_in(outcome.score), Some(-1));
     }
 

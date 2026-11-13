@@ -47,6 +47,8 @@ pub struct MovePicker {
     index: usize,
     /// `list[..bad]` holds the losing captures set aside for the last stage.
     bad: usize,
+    /// Set by the search when no further quiet move is worth trying.
+    skip_quiets: bool,
 }
 
 /// Added to the score of a capturing evasion to put it above every quiet one.
@@ -110,6 +112,7 @@ impl MovePicker {
             list: MoveList::new(),
             index: 0,
             bad: 0,
+            skip_quiets: false,
         }
     }
 
@@ -128,13 +131,28 @@ impl MovePicker {
             list: MoveList::new(),
             index: 0,
             bad: 0,
+            skip_quiets: false,
         }
+    }
+
+    /// Leaves out every quiet move not yet handed out, the refutations included.
+    pub fn skip_quiets(&mut self) {
+        self.skip_quiets = true;
     }
 
     /// The next move to try, or `None` when there are no more. `pos` and `ci` must be
     /// the ones the picker was made for.
     pub fn next(&mut self, pos: &Position, ci: &CastlingInfo, history: &History) -> Option<Move> {
         loop {
+            if self.skip_quiets
+                && matches!(
+                    self.stage,
+                    Stage::Refutations | Stage::GenQuiet | Stage::Quiet
+                )
+            {
+                self.index = 0;
+                self.stage = Stage::BadNoisy;
+            }
             match self.stage {
                 Stage::TtMove => {
                     self.stage = if pos.in_check() {
@@ -269,6 +287,10 @@ impl MovePicker {
         while self.index < end {
             let mv = moves[self.index].mv;
             self.index += 1;
+            // Only the evasion list still holds quiet moves once they are skipped.
+            if self.skip_quiets && !is_noisy(mv) {
+                continue;
+            }
             if Some(mv) != self.tt_move && !self.refutations.contains(&Some(mv)) {
                 return Some(mv);
             }
@@ -354,6 +376,37 @@ mod tests {
                 let moves = drain(MovePicker::quiescence(pos, ci, hint), pos, ci);
                 assert_eq!(sorted(moves), expected, "{} {hint:?}", pos.fen(ci));
             }
+        });
+    }
+
+    #[test]
+    #[cfg_attr(miri, ignore)]
+    fn skipping_quiets_leaves_the_noisy_moves() {
+        random_positions(4, 100, |pos, ci| {
+            let mut all = MoveList::new();
+            gen_all(pos, ci, &mut all);
+            let noisy = sorted(all.iter().filter(|&mv| is_noisy(mv)).collect());
+            let history = History::new();
+
+            // Skipped from the start, and skipped after the first quiet move.
+            let mut picker = MovePicker::new(pos, ci, None, [None; 2]);
+            picker.skip_quiets();
+            let moves = drain(picker, pos, ci);
+            assert_eq!(sorted(moves), noisy, "{}", pos.fen(ci));
+
+            let mut picker = MovePicker::new(pos, ci, None, [all.iter().last(), None]);
+            let mut moves = Vec::new();
+            let mut quiets = 0;
+            while let Some(mv) = picker.next(pos, ci, &history) {
+                if is_noisy(mv) {
+                    moves.push(mv);
+                } else {
+                    quiets += 1;
+                    picker.skip_quiets();
+                }
+            }
+            assert!(quiets <= 1, "{}", pos.fen(ci));
+            assert_eq!(sorted(moves), noisy, "{}", pos.fen(ci));
         });
     }
 
