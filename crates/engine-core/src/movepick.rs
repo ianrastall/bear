@@ -2,11 +2,12 @@
 //! kind only when the kinds before it have not already produced a cutoff.
 //!
 //! Not in check, the order is: the transposition-table move, captures and queen
-//! promotions that do not lose material, the killer moves, the other quiet moves, then
-//! the losing captures.
+//! promotions that do not lose material, the killer moves, the other quiet moves by
+//! their history score, then the losing captures.
 //! In check every evasion comes from one list. Moves are pseudo-legal; the caller
 //! checks legality.
 
+use crate::history::History;
 use crate::movegen::{MoveList, ScoredMove, gen_evasions, gen_noisy, gen_quiet};
 use crate::{CastlingInfo, Move, PieceType, Position};
 
@@ -47,6 +48,9 @@ pub struct MovePicker {
     /// `list[..bad]` holds the losing captures set aside for the last stage.
     bad: usize,
 }
+
+/// Added to the score of a capturing evasion to put it above every quiet one.
+const EVASION_NOISY: i32 = 1 << 20;
 
 /// Most valuable victim first, then least valuable attacker; promotions by piece.
 fn noisy_score(pos: &Position, mv: Move) -> i32 {
@@ -129,7 +133,7 @@ impl MovePicker {
 
     /// The next move to try, or `None` when there are no more. `pos` and `ci` must be
     /// the ones the picker was made for.
-    pub fn next(&mut self, pos: &Position, ci: &CastlingInfo) -> Option<Move> {
+    pub fn next(&mut self, pos: &Position, ci: &CastlingInfo, history: &History) -> Option<Move> {
         loop {
             match self.stage {
                 Stage::TtMove => {
@@ -193,6 +197,11 @@ impl MovePicker {
                 Stage::GenQuiet => {
                     self.index = self.list.len();
                     gen_quiet(pos, ci, &mut self.list);
+                    let quiets = &mut self.list.as_mut_slice()[self.index..];
+                    for scored in quiets.iter_mut() {
+                        scored.score = history.quiet(pos, scored.mv);
+                    }
+                    sort(quiets);
                     self.stage = Stage::Quiet;
                 }
                 Stage::Quiet => {
@@ -213,7 +222,12 @@ impl MovePicker {
                 Stage::GenEvasions => {
                     gen_evasions(pos, &mut self.list);
                     for scored in self.list.as_mut_slice() {
-                        scored.score = noisy_score(pos, scored.mv);
+                        // Captures and promotions first, whatever the history says.
+                        scored.score = if is_noisy(scored.mv) || scored.mv.is_promotion() {
+                            EVASION_NOISY + noisy_score(pos, scored.mv)
+                        } else {
+                            history.quiet(pos, scored.mv)
+                        };
                     }
                     sort(self.list.as_mut_slice());
                     self.stage = Stage::Evasions;
@@ -268,12 +282,21 @@ mod tests {
     use super::*;
     use crate::movegen::{gen_all, tests::random_positions};
 
-    fn drain(mut picker: MovePicker, pos: &Position, ci: &CastlingInfo) -> Vec<Move> {
+    fn drain_with(
+        mut picker: MovePicker,
+        pos: &Position,
+        ci: &CastlingInfo,
+        history: &History,
+    ) -> Vec<Move> {
         let mut moves = Vec::new();
-        while let Some(mv) = picker.next(pos, ci) {
+        while let Some(mv) = picker.next(pos, ci, history) {
             moves.push(mv);
         }
         moves
+    }
+
+    fn drain(picker: MovePicker, pos: &Position, ci: &CastlingInfo) -> Vec<Move> {
+        drain_with(picker, pos, ci, &History::new())
     }
 
     fn sorted(mut moves: Vec<Move>) -> Vec<u16> {
@@ -370,5 +393,17 @@ mod tests {
         assert_eq!(with_killers[1], killers[0].unwrap());
         assert_eq!(with_killers[with_killers.len() - 2], killers[1].unwrap());
         assert_eq!(with_killers.len(), moves.len());
+
+        // History decides the order of the other quiet moves.
+        let mut history = History::new();
+        let favourite = find("e3c2").unwrap();
+        let disliked = find("e1f2").unwrap();
+        history.update_quiet(&pos, favourite, 900);
+        history.update_quiet(&pos, disliked, -900);
+        let picker = MovePicker::new(&pos, &ci, None, [None; 2]);
+        let by_history = drain_with(picker, &pos, &ci, &history);
+        assert_eq!(by_history[1], favourite);
+        assert_eq!(by_history[by_history.len() - 3], disliked);
+        assert_eq!(by_history.len(), moves.len());
     }
 }

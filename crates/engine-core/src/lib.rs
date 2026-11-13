@@ -13,6 +13,7 @@ pub mod bitboard;
 pub mod castling;
 pub mod chess_move;
 pub mod eval;
+pub mod history;
 pub mod movegen;
 pub mod movepick;
 pub mod perft;

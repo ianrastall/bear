@@ -8,6 +8,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use crate::eval::Evaluator;
+use crate::history::{self, History};
 use crate::movegen::{MoveList, gen_all};
 use crate::movepick::{MovePicker, Refutations, is_noisy};
 use crate::time::{Limits, TimeBudget};
@@ -66,6 +67,9 @@ fn lmr_table() -> Box<[[i32; 64]]> {
     }
     table
 }
+
+/// How many quiet moves a node remembers having tried, for the history penalty.
+const MAX_QUIETS: usize = 64;
 
 /// What a search shares with other threads, borrowed for the length of one `go`.
 #[derive(Copy, Clone)]
@@ -150,6 +154,7 @@ pub struct ThreadData<E: Evaluator> {
     /// root and after a null move.
     moved: Box<[Option<(Piece, Square)>]>,
     lmr: Box<[[i32; 64]]>,
+    history: History,
     /// Keys of every position from the start of the game to the current node.
     keys: Vec<u64>,
     castling: CastlingInfo,
@@ -167,6 +172,7 @@ impl<E: Evaluator> ThreadData<E> {
             evals: vec![NO_EVAL; MAX_PLY + 1].into_boxed_slice(),
             moved: vec![None; MAX_PLY + 2].into_boxed_slice(),
             lmr: lmr_table(),
+            history: History::new(),
             keys,
             castling,
         }
@@ -578,11 +584,21 @@ impl<E: Evaluator> Worker<'_, E> {
         let mut best = -INFINITY;
         let mut best_move = None;
         let mut legal = 0;
-        while let Some(mv) = picker.next(&self.td.positions[ply], &self.td.castling) {
+        // Quiet moves searched without causing a cutoff.
+        let mut quiets = [None; MAX_QUIETS];
+        let mut quiet_count = 0;
+        while let Some(mv) =
+            picker.next(&self.td.positions[ply], &self.td.castling, &self.td.history)
+        {
             if !self.td.positions[ply].is_legal(mv, &self.td.castling) {
                 continue;
             }
             legal += 1;
+            let history_score = if is_noisy(mv) {
+                0
+            } else {
+                self.td.history.quiet(&self.td.positions[ply], mv)
+            };
 
             self.make(ply, mv);
             let new_depth = depth - 1;
@@ -606,6 +622,8 @@ impl<E: Evaluator> Worker<'_, E> {
                 reduction -= LMR_ONE * gives_check as i32;
                 reduction -= LMR_ONE * killers.contains(&Some(mv)) as i32;
                 reduction += LMR_ONE * tt_move.is_some_and(|mv| mv.is_capture()) as i32;
+                // A full history score is worth two plies either way.
+                reduction -= history_score * LMR_ONE / 8192;
 
                 let reduced = (new_depth - reduction / LMR_ONE).clamp(1, new_depth);
                 score = -self.alpha_beta(ply + 1, -alpha - 1, -alpha, reduced, true);
@@ -634,11 +652,15 @@ impl<E: Evaluator> Worker<'_, E> {
                     }
                     if score >= beta {
                         if !is_noisy(mv) {
-                            self.remember_cutoff(ply, mv);
+                            self.remember_cutoff(ply, mv, depth, &quiets[..quiet_count]);
                         }
                         break;
                     }
                 }
+            }
+            if !is_noisy(mv) && quiet_count < MAX_QUIETS {
+                quiets[quiet_count] = Some(mv);
+                quiet_count += 1;
             }
         }
 
@@ -724,7 +746,9 @@ impl<E: Evaluator> Worker<'_, E> {
             MovePicker::quiescence(&self.td.positions[ply], &self.td.castling, tt_move);
 
         let mut legal = 0;
-        while let Some(mv) = picker.next(&self.td.positions[ply], &self.td.castling) {
+        while let Some(mv) =
+            picker.next(&self.td.positions[ply], &self.td.castling, &self.td.history)
+        {
             // A capture that loses material will not rescue a position that standing
             // pat does not.
             if !in_check && !self.td.positions[ply].see_ge(mv, 0) {
@@ -769,13 +793,22 @@ impl<E: Evaluator> Worker<'_, E> {
         best
     }
 
-    /// Notes that the quiet move `mv` refuted the position at `ply`, to try it early
-    /// in the positions searched next at the same ply.
-    fn remember_cutoff(&mut self, ply: usize, mv: Move) {
+    /// Notes that the quiet move `mv` refuted the position at `ply` after the quiet
+    /// moves in `failed` did not: it becomes a killer for this ply and gains history,
+    /// and they lose some.
+    fn remember_cutoff(&mut self, ply: usize, mv: Move, depth: i32, failed: &[Option<Move>]) {
         let killers = &mut self.td.killers[ply];
         if killers[0] != Some(mv) {
             killers[1] = killers[0];
             killers[0] = Some(mv);
+        }
+
+        let pos = &self.td.positions[ply];
+        self.td.history.update_quiet(pos, mv, history::bonus(depth));
+        for &earlier in failed.iter().flatten() {
+            self.td
+                .history
+                .update_quiet(pos, earlier, -history::malus(depth));
         }
     }
 
