@@ -286,6 +286,41 @@ impl Position {
         }
     }
 
+    /// Writes this position with the move passed to the opponent into `out`. The side
+    /// to move must not be in check.
+    pub fn make_null_into(&self, out: &mut Position) {
+        debug_assert!(!self.in_check());
+        out.clone_from(self);
+        let state = &mut out.state;
+        state.halfmove = state.halfmove.saturating_add(1);
+        state.plies_from_null = 0;
+        state.captured = None;
+        if let Some(ep) = state.ep_square.take() {
+            state.key ^= KEYS.ep_file[ep.file() as usize];
+        }
+        if state.stm == Color::Black {
+            state.fullmove = state.fullmove.saturating_add(1);
+        }
+        state.stm = !state.stm;
+        state.key ^= KEYS.side;
+        out.refresh_check_info();
+
+        #[cfg(debug_assertions)]
+        if let Err(problem) = out.validate() {
+            panic!("invalid position after a null move: {problem}");
+        }
+    }
+
+    /// Whether `color` has a piece other than pawns and the king.
+    #[inline]
+    pub fn has_non_pawn_material(&self, color: Color) -> bool {
+        let pieces = self.pieces(PieceType::Knight)
+            | self.pieces(PieceType::Bishop)
+            | self.pieces(PieceType::Rook)
+            | self.pieces(PieceType::Queen);
+        (pieces & self.colors(color)).any()
+    }
+
     /// Checkers, pinned pieces and threatened squares for the side to move.
     fn check_info(&self) -> (Bitboard, Bitboard, Bitboard) {
         let us = self.state.stm;
@@ -492,6 +527,42 @@ impl core::fmt::Display for Position {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn null_move_passes_the_turn() {
+        let fen = "rnbqkbnr/pppp1ppp/8/4p3/4P3/8/PPPP1PPP/RNBQKBNR w KQkq e6 0 2";
+        let (pos, ci) = Position::from_fen(fen).unwrap();
+        let mut passed = pos.clone();
+        pos.make_null_into(&mut passed);
+        assert_eq!(passed.stm(), Color::Black);
+        assert_eq!(passed.key(), pos.key() ^ KEYS.side);
+        assert_eq!(passed.state().plies_from_null, 0);
+        assert_eq!(passed.state().pawn_key, pos.state().pawn_key);
+        let mut back = passed.clone();
+        passed.make_null_into(&mut back);
+        assert_eq!(back.key(), pos.key());
+        assert_eq!(
+            back.fen(&ci),
+            "rnbqkbnr/pppp1ppp/8/4p3/4P3/8/PPPP1PPP/RNBQKBNR w KQkq - 2 3"
+        );
+
+        // The en passant square goes with the turn.
+        let fen = "rnbqkbnr/ppp1pppp/8/8/3pP3/8/PPPP1PPP/RNBQKBNR b KQkq e3 0 2";
+        let (pos, ci) = Position::from_fen(fen).unwrap();
+        assert!(pos.state().ep_square.is_some());
+        let mut passed = pos.clone();
+        pos.make_null_into(&mut passed);
+        assert_eq!(passed.state().ep_square, None);
+        assert_eq!(
+            passed.fen(&ci),
+            "rnbqkbnr/ppp1pppp/8/8/3pP3/8/PPPP1PPP/RNBQKBNR w KQkq - 1 3"
+        );
+
+        assert!(pos.has_non_pawn_material(Color::White));
+        let (bare, _) = Position::from_fen("4k3/pppp4/8/8/8/8/PPPP4/3RK3 w - - 0 1").unwrap();
+        assert!(bare.has_non_pawn_material(Color::White));
+        assert!(!bare.has_non_pawn_material(Color::Black));
+    }
     use crate::MoveFlag;
 
     fn play(

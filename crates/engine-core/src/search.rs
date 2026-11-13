@@ -12,7 +12,7 @@ use crate::movegen::{MoveList, gen_all};
 use crate::movepick::{MovePicker, Refutations, is_noisy};
 use crate::time::{Limits, TimeBudget};
 use crate::tt::{Bound, NO_EVAL, TranspositionTable, TtEntry, from_tt, to_tt};
-use crate::{CastlingInfo, Move, PieceType, Position};
+use crate::{CastlingInfo, Move, Piece, PieceType, Position, Square};
 
 /// Deepest ply the search can reach.
 pub const MAX_PLY: usize = 240;
@@ -26,6 +26,10 @@ const INFINITY: i32 = MATE + 1;
 const RFP_MAX_DEPTH: i32 = 8;
 /// How far above beta the evaluation must be, per ply of remaining depth.
 const RFP_MARGIN: i32 = 75;
+/// Null-move pruning applies from this depth.
+const NMP_MIN_DEPTH: i32 = 3;
+/// From this depth a null-move cutoff is checked by a search without null moves.
+const NMP_VERIFY_DEPTH: i32 = 14;
 
 /// What a search shares with other threads, borrowed for the length of one `go`.
 #[derive(Copy, Clone)]
@@ -106,6 +110,9 @@ pub struct ThreadData<E: Evaluator> {
     killers: Box<[Refutations]>,
     /// The static evaluation at each ply of the current line, or `NO_EVAL` in check.
     evals: Box<[i32]>,
+    /// The piece and target square of the move that led to each ply; `None` at the
+    /// root and after a null move.
+    moved: Box<[Option<(Piece, Square)>]>,
     /// Keys of every position from the start of the game to the current node.
     keys: Vec<u64>,
     castling: CastlingInfo,
@@ -121,6 +128,7 @@ impl<E: Evaluator> ThreadData<E> {
             pv: vec![PvLine::EMPTY; MAX_PLY + 2].into_boxed_slice(),
             killers: vec![[None; 2]; MAX_PLY + 1].into_boxed_slice(),
             evals: vec![NO_EVAL; MAX_PLY + 1].into_boxed_slice(),
+            moved: vec![None; MAX_PLY + 2].into_boxed_slice(),
             keys,
             castling,
         }
@@ -170,6 +178,7 @@ impl<E: Evaluator> ThreadData<E> {
             stopped: false,
             can_stop: false,
             root_best: None,
+            nmp_min_ply: 0,
         };
 
         let root_moves = worker.legal_root_moves();
@@ -256,6 +265,9 @@ struct Worker<'a, E: Evaluator> {
     can_stop: bool,
     /// Best move of the previous iteration, searched first at the root.
     root_best: Option<Move>,
+    /// While a null-move cutoff is being verified, null moves are not tried above
+    /// this ply.
+    nmp_min_ply: usize,
 }
 
 impl<E: Evaluator> Worker<'_, E> {
@@ -342,6 +354,19 @@ impl<E: Evaluator> Worker<'_, E> {
         let (parents, children) = self.td.positions.split_at_mut(ply + 1);
         parents[ply].make_into(mv, &self.td.castling, &mut children[0]);
         self.td.keys.push(children[0].key());
+        self.td.moved[ply + 1] = parents[ply]
+            .piece_on(mv.from())
+            .map(|piece| (piece, mv.to()));
+    }
+
+    /// Passes the move: the position at `ply` with the other side to move goes into
+    /// the next slot of the stack.
+    #[inline]
+    fn make_null(&mut self, ply: usize) {
+        let (parents, children) = self.td.positions.split_at_mut(ply + 1);
+        parents[ply].make_null_into(&mut children[0]);
+        self.td.keys.push(children[0].key());
+        self.td.moved[ply + 1] = None;
     }
 
     #[inline]
@@ -448,6 +473,46 @@ impl<E: Evaluator> Worker<'_, E> {
                 && beta > -MATE_BOUND
             {
                 return (eval + beta) / 2;
+            }
+
+            // Null move: if the position still holds beta after giving the opponent a
+            // free move, a real move will hold it too. Not twice in a row, and not
+            // with only pawns, where having to move can be the whole problem.
+            if depth >= NMP_MIN_DEPTH
+                && eval >= beta
+                && static_eval >= beta - 20 * depth + 180
+                && self.td.moved[ply].is_some()
+                && ply >= self.nmp_min_ply
+                && beta > -MATE_BOUND
+                && self.td.positions[ply].has_non_pawn_material(self.td.positions[ply].stm())
+            {
+                let reduction = 4 + depth / 4 + ((eval - beta) / 200).min(3);
+                self.make_null(ply);
+                let mut score = -self.alpha_beta(ply + 1, -beta, -beta + 1, depth - reduction);
+                self.unmake();
+                if self.stopped {
+                    return 0;
+                }
+                if score >= beta {
+                    // A mate found with a free move in hand is not a mate.
+                    if score >= MATE_BOUND {
+                        score = beta;
+                    }
+                    if depth < NMP_VERIFY_DEPTH || self.nmp_min_ply > 0 {
+                        return score;
+                    }
+                    // At high depth, confirm with a reduced search in which this
+                    // side may not pass again for most of the way down.
+                    self.nmp_min_ply = ply + (3 * (depth - reduction) / 4) as usize;
+                    let verified = self.alpha_beta(ply, beta - 1, beta, depth - reduction);
+                    self.nmp_min_ply = 0;
+                    if self.stopped {
+                        return 0;
+                    }
+                    if verified >= beta {
+                        return score;
+                    }
+                }
             }
         }
 
@@ -799,6 +864,7 @@ mod tests {
             stopped: false,
             can_stop: false,
             root_best: None,
+            nmp_min_ply: 0,
         }
     }
 
