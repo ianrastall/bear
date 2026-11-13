@@ -341,6 +341,8 @@ impl<E: Evaluator> Worker<'_, E> {
         self.td.keys.pop();
     }
 
+    /// The main search. A node with a window wider than one point is on the principal
+    /// variation; everywhere else only the side of the window matters.
     fn alpha_beta(&mut self, ply: usize, mut alpha: i32, mut beta: i32, depth: i32) -> i32 {
         if depth <= 0 {
             return self.quiescence(ply, alpha, beta);
@@ -352,6 +354,7 @@ impl<E: Evaluator> Worker<'_, E> {
         self.td.pv[ply].len = 0;
 
         let root = ply == 0;
+        let is_pv = beta - alpha > 1;
         if !root {
             if self.is_draw(ply) {
                 // A draw scores a point either side of zero, varying with the node
@@ -377,7 +380,7 @@ impl<E: Evaluator> Worker<'_, E> {
             let score = from_tt(entry.score, ply, halfmove);
             // Near the fifty-move limit the stored score may rest on lines that the
             // rule now cuts short.
-            if !root
+            if !is_pv
                 && entry.depth >= depth
                 && halfmove < 90
                 && entry.bound.cuts(score, alpha, beta)
@@ -408,7 +411,18 @@ impl<E: Evaluator> Worker<'_, E> {
             legal += 1;
 
             self.make(ply, mv);
-            let score = -self.alpha_beta(ply + 1, -beta, -alpha, depth - 1);
+            // The first move is expected to be best. The others only have to be shown
+            // not to beat it, which a window of one point does; one that does beat it
+            // on the principal variation is searched again for its real score.
+            let mut score;
+            if legal == 1 {
+                score = -self.alpha_beta(ply + 1, -beta, -alpha, depth - 1);
+            } else {
+                score = -self.alpha_beta(ply + 1, -alpha - 1, -alpha, depth - 1);
+                if score > alpha && score < beta {
+                    score = -self.alpha_beta(ply + 1, -beta, -alpha, depth - 1);
+                }
+            }
             self.unmake();
             if self.stopped {
                 return 0;
@@ -419,8 +433,10 @@ impl<E: Evaluator> Worker<'_, E> {
                 if score > alpha {
                     alpha = score;
                     best_move = Some(mv);
-                    let (line, rest) = self.td.pv.split_at_mut(ply + 1);
-                    line[ply].set(mv, &rest[0]);
+                    if is_pv {
+                        let (line, rest) = self.td.pv.split_at_mut(ply + 1);
+                        line[ply].set(mv, &rest[0]);
+                    }
                     if score >= beta {
                         if !is_noisy(mv) {
                             self.remember_cutoff(ply, mv);
@@ -454,7 +470,7 @@ impl<E: Evaluator> Worker<'_, E> {
                 eval: NO_EVAL,
                 depth,
                 bound,
-                pv: false,
+                pv: is_pv,
             },
         );
         best
@@ -476,6 +492,7 @@ impl<E: Evaluator> Worker<'_, E> {
             return self.td.eval.evaluate(&self.td.positions[ply]);
         }
 
+        let is_pv = beta - alpha > 1;
         let key = self.td.positions[ply].key();
         let halfmove = self.td.positions[ply].state().halfmove;
         let mut tt_move = None;
@@ -484,7 +501,7 @@ impl<E: Evaluator> Worker<'_, E> {
             tt_move = entry.mv;
             static_eval = entry.eval;
             let score = from_tt(entry.score, ply, halfmove);
-            if halfmove < 90 && entry.bound.cuts(score, alpha, beta) {
+            if !is_pv && halfmove < 90 && entry.bound.cuts(score, alpha, beta) {
                 return score;
             }
         }
