@@ -31,6 +31,13 @@ const RFP_MARGIN: i32 = 75;
 const NMP_MIN_DEPTH: i32 = 3;
 /// From this depth a null-move cutoff is checked by a search without null moves.
 const NMP_VERIFY_DEPTH: i32 = 14;
+/// Exchange pruning of quiet moves: up to this depth, losing more than the margin
+/// times the square of the reduced depth.
+const SEE_QUIET_MAX_DEPTH: i32 = 8;
+const SEE_QUIET_MARGIN: i32 = 25;
+/// Exchange pruning of captures: up to this depth, losing more than the margin per ply.
+const SEE_NOISY_MAX_DEPTH: i32 = 6;
+const SEE_NOISY_MARGIN: i32 = 100;
 /// One ply of reduction in the fixed-point units of the reduction table.
 const LMR_ONE: i32 = 1024;
 
@@ -603,6 +610,25 @@ impl<E: Evaluator> Worker<'_, E> {
             legal += 1;
             let quiet = !is_noisy(mv);
             quiets_seen += quiet as i32;
+
+            // Exchange pruning: a move that loses more material on its square than
+            // the remaining depth could win back. Never the table move.
+            if may_prune && best > -MATE_BOUND && Some(mv) != tt_move {
+                let pos = &self.td.positions[ply];
+                if quiet {
+                    let lmr_depth = (depth
+                        - self.td.lmr[depth.min(63) as usize][legal.min(63)] / LMR_ONE)
+                        .max(0);
+                    if depth <= SEE_QUIET_MAX_DEPTH
+                        && !pos.see_ge(mv, -SEE_QUIET_MARGIN * lmr_depth * lmr_depth)
+                    {
+                        continue;
+                    }
+                } else if depth <= SEE_NOISY_MAX_DEPTH && !pos.see_ge(mv, -SEE_NOISY_MARGIN * depth)
+                {
+                    continue;
+                }
+            }
 
             if may_prune && best > -MATE_BOUND && quiet {
                 // Late move pruning: after enough quiet moves at low depth the rest
