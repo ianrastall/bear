@@ -830,7 +830,17 @@ The combined M5 candidate with untuned weights (bench 6,046,232) played a 120-ga
 | Blunder 7.6.0 64-bit | 2,618 | 37 | 2 | 1 |
 | Weiss 1.0 64-bit | 2,896 | 19 | 13 | 8 |
 
-Matching the total score to the Elo logistic expectation against those fixed anchors gives a local estimate of 2,995 Elo. Resampling paired openings within each opponent gives a 95% interval of 2,920–3,088. This rating describes the combined candidate. The published evaluator on the M4 search has a separate gauntlet with the same pool and settings.
+Matching the total score to the Elo logistic expectation against those fixed anchors gives a local estimate of 2,995 Elo. Resampling paired openings gives a 95% interval of 2,920–3,088. The combined candidate also passed a `[0, 10]` SPRT against M4 at 40+0.4 with 139 wins, 22 draws and 11 losses in 172 games, an 87.21% score and a final LLR of 2.95. There were no crashes, illegal moves or time losses.
+
+The published evaluator (`e25093c`, bench 4,154,595) played the same 120-game gauntlet and scored 89 wins, 17 draws and 14 losses without crashes, illegal moves or time losses. Its local CCRL-anchored estimate is **2,959 Elo** with a paired-opening 95% interval of 2,894–3,027.
+
+| Opponent | Wins | Draws | Losses |
+|---|---:|---:|---:|
+| CT800 1.40 64-bit | 39 | 1 | 0 |
+| Blunder 7.6.0 64-bit | 34 | 3 | 3 |
+| Weiss 1.0 64-bit | 16 | 13 | 11 |
+
+A second Texel dataset used 2,000 Bear games at 5,000 nodes per move with seed `20261121`. It yielded 36,395 training positions and 9,109 held-out positions. The constrained fit reduced held-out log loss from 0.489372 to 0.488397. The larger fit and individual search changes remain subject to their strength tests.
 
 **M4.** The individual tests used fastchess 1.8.2 at 8+0.08, with `[0, 10]` Elo bounds. No recorded game in the tests below ended in a crash, illegal move or time loss.
 
