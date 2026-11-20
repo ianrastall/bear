@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use crate::eval::Evaluator;
-use crate::history::{self, History};
+use crate::history::{self, CorrectionHistory, History};
 use crate::movegen::{MoveList, gen_all};
 use crate::movepick::{MovePicker, Refutations, is_noisy};
 use crate::time::{Limits, TimeBudget};
@@ -169,6 +169,7 @@ pub struct ThreadData<E: Evaluator> {
     moved: Box<[Option<(Piece, Square)>]>,
     lmr: Box<[[i32; 64]]>,
     history: History,
+    correction: CorrectionHistory,
     /// Keys of every position from the start of the game to the current node.
     keys: Vec<u64>,
     castling: CastlingInfo,
@@ -187,6 +188,7 @@ impl<E: Evaluator> ThreadData<E> {
             moved: vec![None; MAX_PLY + 2].into_boxed_slice(),
             lmr: lmr_table(),
             history: History::new(),
+            correction: CorrectionHistory::new(),
             keys,
             castling,
         }
@@ -470,6 +472,17 @@ impl<E: Evaluator> Worker<'_, E> {
         self.td.keys.pop();
     }
 
+    /// The static evaluation `raw_eval` of the position at `ply`, adjusted by what
+    /// the correction history has learned.
+    #[inline]
+    fn corrected(&self, ply: usize, raw_eval: i32) -> i32 {
+        let adjustment = self
+            .td
+            .correction
+            .adjustment(&self.td.positions[ply], self.td.moved[ply]);
+        (raw_eval + adjustment).clamp(1 - MATE_BOUND, MATE_BOUND - 1)
+    }
+
     /// Searches the root to `depth`, at first only inside a window around `previous`,
     /// the score of the last iteration. A score outside the window only says on which
     /// side the truth lies, so the window is widened there and the search repeated.
@@ -549,7 +562,9 @@ impl<E: Evaluator> Worker<'_, E> {
         let halfmove = self.td.positions[ply].state().halfmove;
         let in_check = self.td.positions[ply].in_check();
         let mut tt_move = None;
-        let mut static_eval = NO_EVAL;
+        // The evaluation function's own score, as kept in the table; the static
+        // evaluation the search works with adds the correction to it.
+        let mut raw_eval = NO_EVAL;
         // The static evaluation, replaced by a table score that is known to be
         // nearer the truth on the side that matters.
         let mut eval = NO_EVAL;
@@ -559,7 +574,7 @@ impl<E: Evaluator> Worker<'_, E> {
         if let Some(entry) = entry {
             tt_move = entry.mv;
             tt_pv |= entry.pv;
-            static_eval = entry.eval;
+            raw_eval = entry.eval;
             let score = from_tt(entry.score, ply, halfmove);
             // Near the fifty-move limit the stored score may rest on lines that the
             // rule now cuts short.
@@ -571,13 +586,15 @@ impl<E: Evaluator> Worker<'_, E> {
                 return score;
             }
         }
-        if in_check {
-            static_eval = NO_EVAL;
+        let static_eval = if in_check {
+            raw_eval = NO_EVAL;
+            NO_EVAL
         } else {
-            if static_eval == NO_EVAL {
-                static_eval = self.td.eval.evaluate(&self.td.positions[ply]);
+            if raw_eval == NO_EVAL {
+                raw_eval = self.td.eval.evaluate(&self.td.positions[ply]);
             }
-            eval = static_eval;
+            let corrected = self.corrected(ply, raw_eval);
+            eval = corrected;
             if let Some(entry) = entry {
                 let score = from_tt(entry.score, ply, halfmove);
                 let nearer = match entry.bound {
@@ -590,7 +607,8 @@ impl<E: Evaluator> Worker<'_, E> {
                     eval = score;
                 }
             }
-        }
+            corrected
+        };
         self.td.evals[ply] = static_eval;
         // Whether the side to move stands better than it did two plies ago; when it
         // was in check then, four plies ago.
@@ -671,6 +689,8 @@ impl<E: Evaluator> Worker<'_, E> {
         let old_alpha = alpha;
         let mut best = -INFINITY;
         let mut best_move = None;
+        // Whether the move with the best score so far is quiet.
+        let mut best_was_quiet = false;
         let mut legal = 0;
         // Quiet moves searched without causing a cutoff.
         let mut quiets = [None; MAX_QUIETS];
@@ -783,6 +803,7 @@ impl<E: Evaluator> Worker<'_, E> {
 
             if score > best {
                 best = score;
+                best_was_quiet = quiet;
                 if score > alpha {
                     alpha = score;
                     best_move = Some(mv);
@@ -819,12 +840,28 @@ impl<E: Evaluator> Worker<'_, E> {
         } else {
             Bound::Upper
         };
+        // The search score says how far the static evaluation was off, when the
+        // best move was quiet (a capture changes what is being evaluated) and the
+        // bound points the same way as the error.
+        if !in_check
+            && best_was_quiet
+            && best.abs() < MATE_BOUND
+            && (bound != Bound::Lower || best > static_eval)
+            && (bound != Bound::Upper || best < static_eval)
+        {
+            self.td.correction.update(
+                &self.td.positions[ply],
+                self.td.moved[ply],
+                depth,
+                best - static_eval,
+            );
+        }
         self.shared.tt.store(
             key,
             TtEntry {
                 mv: best_move,
                 score: to_tt(best, ply),
-                eval: static_eval,
+                eval: raw_eval,
                 depth,
                 bound,
                 pv: tt_pv,
@@ -871,10 +908,11 @@ impl<E: Evaluator> Worker<'_, E> {
             static_eval = NO_EVAL;
         } else {
             // The side to move may decline every capture and keep the static score.
+            // `static_eval` stays the uncorrected one, which is what the table keeps.
             if static_eval == NO_EVAL {
                 static_eval = self.td.eval.evaluate(&self.td.positions[ply]);
             }
-            best = static_eval;
+            best = self.corrected(ply, static_eval);
             if best >= beta {
                 self.store_quiescence(key, None, best, static_eval, Bound::Lower, ply);
                 return best;
