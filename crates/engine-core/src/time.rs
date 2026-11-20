@@ -50,6 +50,9 @@ impl TimeBudget {
     /// The budget for `stm` under `limits`, keeping `overhead_ms` in reserve for the
     /// delay between deciding on a move and the clock stopping.
     pub fn new(limits: &Limits, stm: Color, overhead_ms: u64) -> TimeBudget {
+        if limits.infinite {
+            return TimeBudget::default();
+        }
         if let Some(movetime) = limits.movetime {
             let ms = movetime.saturating_sub(overhead_ms).max(1);
             let exact = Some(Duration::from_millis(ms));
@@ -58,23 +61,41 @@ impl TimeBudget {
                 hard: exact,
             };
         }
+        if limits.depth.is_some() || limits.nodes.is_some() {
+            return TimeBudget::default();
+        }
         let Some(remaining) = limits.time[stm.index()] else {
             return TimeBudget::default();
         };
 
-        let t = remaining.saturating_sub(overhead_ms).max(1);
-        let inc = limits.inc[stm.index()];
+        let t = u128::from(remaining.saturating_sub(overhead_ms).max(1));
+        let inc = u128::from(limits.inc[stm.index()]);
         let moves_left = match limits.movestogo {
             Some(moves) if moves > 0 => moves.min(40) + 1,
             _ => 20,
         };
-        let base = t / moves_left + 3 * inc / 4;
+        let base = t / u128::from(moves_left) + 3 * inc / 4;
         let hard = (4 * base).min(3 * t / 4).max(1);
         let soft = (13 * base / 20).clamp(1, hard);
         TimeBudget {
-            soft: Some(Duration::from_millis(soft)),
-            hard: Some(Duration::from_millis(hard)),
+            soft: Some(Duration::from_millis(soft as u64)),
+            hard: Some(Duration::from_millis(hard as u64)),
         }
+    }
+
+    /// Adjusts the clock budget using the most recent completed iteration.
+    pub(crate) fn adaptive_soft(
+        self,
+        stable: u32,
+        score_drop: i32,
+        best_fraction: f64,
+    ) -> Option<Duration> {
+        let soft = self.soft?;
+        let hard = self.hard?;
+        let stability = 1.30 - 0.05 * f64::from(stable.min(10));
+        let score = (1.0 + f64::from(score_drop) / 80.0).clamp(0.75, 1.50);
+        let nodes = (1.6 - 1.2 * best_fraction).clamp(0.50, 1.40);
+        Some(soft.mul_f64(stability * score * nodes).min(hard))
     }
 }
 
@@ -133,6 +154,26 @@ mod tests {
             ms(TimeBudget::new(&clock(8000, 80, None), Color::White, 10)),
             (298, 1836)
         );
+    }
+
+    #[test]
+    fn iteration_feedback_scales_only_the_soft_limit() {
+        let budget = TimeBudget::new(&clock(8_000, 80, None), Color::White, 10);
+        let easy = budget.adaptive_soft(10, -120, 1.0).unwrap();
+        let difficult = budget.adaptive_soft(0, 120, 0.0).unwrap();
+        assert!(easy < budget.soft.unwrap());
+        assert!(difficult > budget.soft.unwrap());
+        assert!(difficult <= budget.hard.unwrap());
+    }
+
+    #[test]
+    fn large_clock_inputs_are_bounded() {
+        let (soft, hard) = ms(TimeBudget::new(
+            &clock(u64::MAX, u64::MAX, None),
+            Color::White,
+            0,
+        ));
+        assert!(soft <= hard && hard <= u64::MAX / 4 * 3 + 3);
     }
 
     #[test]

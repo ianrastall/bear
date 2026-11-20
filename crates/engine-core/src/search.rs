@@ -220,6 +220,7 @@ impl<E: Evaluator> ThreadData<E> {
         shared.tt.new_search();
         let stm = self.positions[0].stm();
         let budget = TimeBudget::new(limits, stm, overhead_ms);
+        let adaptive_time = budget.hard.is_some() && limits.movetime.is_none();
         // Room for the deepest line plus this search's own pushes.
         self.keys.reserve(MAX_PLY + 1);
         // Killers belong to one tree; the next search starts a different one.
@@ -236,11 +237,12 @@ impl<E: Evaluator> ThreadData<E> {
             stopped: false,
             can_stop: false,
             root_best: None,
+            root_nodes: Vec::new(),
             nmp_min_ply: 0,
             root_depth: 0,
         };
 
-        let root_moves = worker.legal_root_moves();
+        let root_moves = worker.legal_root_moves(adaptive_time);
         let mut outcome = Outcome {
             best: None,
             ponder: None,
@@ -262,6 +264,8 @@ impl<E: Evaluator> ThreadData<E> {
             .unwrap_or(MAX_PLY as i32 - 1)
             .clamp(1, MAX_PLY as i32 - 1);
         let mut pv = Vec::with_capacity(MAX_PLY);
+        let mut stability = 0;
+        let mut soft = budget.soft;
         for depth in 1..=max_depth {
             worker.seldepth = 0;
             worker.root_depth = depth;
@@ -273,8 +277,31 @@ impl<E: Evaluator> ThreadData<E> {
             let line = &worker.td.pv[0];
             pv.clear();
             pv.extend(line.moves[..line.len].iter().flatten().copied());
+            let best = pv.first().copied();
+            if adaptive_time && let Some(mv) = best {
+                stability = if best == outcome.best {
+                    stability + 1
+                } else {
+                    0
+                };
+                let best_nodes = worker
+                    .root_nodes
+                    .iter()
+                    .find(|&&(root, _)| root == mv)
+                    .map_or(0, |&(_, nodes)| nodes);
+                let score_drop = if outcome.depth > 0 {
+                    outcome.score - score
+                } else {
+                    0
+                };
+                soft = budget.adaptive_soft(
+                    stability,
+                    score_drop,
+                    best_nodes as f64 / worker.nodes.max(1) as f64,
+                );
+            }
             outcome = Outcome {
-                best: pv.first().copied(),
+                best,
                 ponder: pv.get(1).copied(),
                 score,
                 depth,
@@ -298,11 +325,11 @@ impl<E: Evaluator> ThreadData<E> {
             if shared.stop.load(Ordering::Relaxed) {
                 break;
             }
-            if budget.soft.is_some_and(|soft| elapsed >= soft) {
+            if soft.is_some_and(|soft| elapsed >= soft) {
                 break;
             }
             // With a clock running, a forced move needs no thought.
-            if root_moves == 1 && limits.is_timed(stm) {
+            if root_moves == 1 && budget.hard.is_some() {
                 break;
             }
         }
@@ -325,6 +352,7 @@ struct Worker<'a, E: Evaluator> {
     can_stop: bool,
     /// Best move of the previous iteration, searched first at the root.
     root_best: Option<Move>,
+    root_nodes: Vec<(Move, u64)>,
     /// While a null-move cutoff is being verified, null moves are not tried above
     /// this ply.
     nmp_min_ply: usize,
@@ -333,13 +361,19 @@ struct Worker<'a, E: Evaluator> {
 }
 
 impl<E: Evaluator> Worker<'_, E> {
-    fn legal_root_moves(&self) -> usize {
+    fn legal_root_moves(&mut self, measure: bool) -> usize {
         let pos = &self.td.positions[0];
         let mut list = MoveList::new();
         gen_all(pos, &self.td.castling, &mut list);
-        list.iter()
-            .filter(|&mv| pos.is_legal(mv, &self.td.castling))
-            .count()
+        let legal = list
+            .iter()
+            .filter(|&mv| pos.is_legal(mv, &self.td.castling));
+        if measure {
+            self.root_nodes.extend(legal.map(|mv| (mv, 0)));
+            self.root_nodes.len()
+        } else {
+            legal.count()
+        }
     }
 
     /// Counts a node and decides whether the search has to end.
@@ -353,12 +387,12 @@ impl<E: Evaluator> Worker<'_, E> {
         if self.node_limit.is_some_and(|limit| self.nodes >= limit) {
             self.stopped = true;
         }
-        if self.nodes & 1023 == 0 {
-            if self.shared.stop.load(Ordering::Relaxed) {
-                self.stopped = true;
-            }
-            if self.nodes & 2047 == 0 && self.hard.is_some_and(|hard| self.start.elapsed() >= hard)
-            {
+        if self.nodes & 1023 == 0 && self.shared.stop.load(Ordering::Relaxed) {
+            self.stopped = true;
+        }
+        if let Some(hard) = self.hard {
+            let poll_mask = if hard.as_millis() < 20 { 63 } else { 1023 };
+            if self.nodes & poll_mask == 0 && self.start.elapsed() >= hard {
                 self.stopped = true;
             }
         }
@@ -692,6 +726,7 @@ impl<E: Evaluator> Worker<'_, E> {
                 self.td.history.quiet(&self.td.positions[ply], mv)
             };
 
+            let nodes_before = self.nodes;
             self.make(ply, mv);
             let gives_check = self.td.positions[ply + 1].in_check();
             // A check that does not lose material is followed a ply further. The
@@ -738,6 +773,10 @@ impl<E: Evaluator> Worker<'_, E> {
                 score = -self.alpha_beta(ply + 1, -beta, -alpha, new_depth, false);
             }
             self.unmake();
+            if root && let Some((_, nodes)) = self.root_nodes.iter_mut().find(|entry| entry.0 == mv)
+            {
+                *nodes += self.nodes - nodes_before;
+            }
             if self.stopped {
                 return 0;
             }
@@ -1081,6 +1120,7 @@ mod tests {
             stopped: false,
             can_stop: false,
             root_best: None,
+            root_nodes: Vec::new(),
             nmp_min_ply: 0,
             root_depth: 0,
         }

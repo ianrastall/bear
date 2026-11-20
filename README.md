@@ -6,7 +6,7 @@ The design is in [docs/architecture.md](docs/architecture.md): board representat
 
 ## Status
 
-Milestone M5 is in progress. Bear plays standard chess and Chess960 through any UCI interface. The hand-crafted evaluator now scores pawn structure, passed pawns, mobility and king safety alongside material and piece-square tables. The history and time-management changes are in strength testing.
+Milestone M5 is in progress. Bear plays standard chess and Chess960 through any UCI interface. Its hand-crafted evaluator scores pawn structure, passed pawns, mobility and king safety alongside material and piece-square tables. The adaptive clock adjusts its time budget using move stability, score changes and effort spent on the leading move. History and fitted evaluation weights are in strength testing.
 
 ## Building
 

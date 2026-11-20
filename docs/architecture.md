@@ -842,6 +842,8 @@ The published evaluator (`e25093c`, bench 4,154,595) played the same 120-game ga
 
 A second Texel dataset used 2,000 Bear games at 5,000 nodes per move with seed `20261121`. It yielded 36,395 training positions and 9,109 held-out positions. The constrained fit reduced held-out log loss from 0.489372 to 0.488397. The larger fit and individual search changes remain subject to their strength tests.
 
+The adaptive clock passed its standalone `[0, 10]` SPRT at 8+0.08 against `e25093c` with 319 wins, 258 draws and 233 losses in 810 games. The result was +37 ± 18 Elo and a final LLR of 2.95. There were no crashes, illegal moves or time losses. The depth-14 bench remains 4,154,595 nodes.
+
 **M4.** The individual tests used fastchess 1.8.2 at 8+0.08, with `[0, 10]` Elo bounds. No recorded game in the tests below ended in a crash, illegal move or time loss.
 
 | Step | Games | Elo | Outcome |
