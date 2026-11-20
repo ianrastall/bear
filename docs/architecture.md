@@ -822,6 +822,16 @@ Perft and fuzzing results for M1 are in 7.1.
 
 The first Texel dataset used seed `20261120`, 600 Bear self-play games and a 2,500-node search limit per move. The fit used 10,446 quiet positions for training and 2,380 from distinct held-out games. The initial 60-epoch candidate reduced the held-out log loss from 0.483802 to 0.476134 and scored 27.5% against the untuned evaluator in a stopped 40-game trial. The untuned weights are used while the remaining strength tests run.
 
+The combined M5 candidate with untuned weights (bench 6,046,232) played a 120-game local gauntlet at 40+0.4, single thread, 16 MiB hash, with both colours from each sampled `bear-8ply.epd` opening and the opponents' own books disabled. It scored 92 wins, 17 draws and 11 losses without crashes, illegal moves or time losses. The opponent anchors come from the [14 November 2026 CCRL Blitz list](https://computerchess.org.uk/404/rating_list_all.html).
+
+| Opponent | Anchor Elo | Wins | Draws | Losses |
+|---|---:|---:|---:|---:|
+| CT800 1.40 64-bit | 2,343 | 36 | 2 | 2 |
+| Blunder 7.6.0 64-bit | 2,618 | 37 | 2 | 1 |
+| Weiss 1.0 64-bit | 2,896 | 19 | 13 | 8 |
+
+Matching the total score to the Elo logistic expectation against those fixed anchors gives a local estimate of 2,995 Elo. Resampling paired openings within each opponent gives a 95% interval of 2,920–3,088. This rating describes the combined candidate. The published evaluator on the M4 search has a separate gauntlet with the same pool and settings.
+
 **M4.** The individual tests used fastchess 1.8.2 at 8+0.08, with `[0, 10]` Elo bounds. No recorded game in the tests below ended in a crash, illegal move or time loss.
 
 | Step | Games | Elo | Outcome |
