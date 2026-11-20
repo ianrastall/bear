@@ -23,6 +23,13 @@ pub const MATE: i32 = 32_000;
 pub const MATE_BOUND: i32 = MATE - MAX_PLY as i32;
 const INFINITY: i32 = MATE + 1;
 
+/// From this depth on, the root is first searched in a window around the last score.
+const ASPIRATION_MIN_DEPTH: i32 = 5;
+/// Half-width of that window when the last score was level.
+const ASPIRATION_DELTA: i32 = 12;
+/// A window that has grown past this is dropped altogether.
+const ASPIRATION_MAX_DELTA: i32 = 1000;
+
 /// Reverse futility pruning applies up to this depth.
 const RFP_MAX_DEPTH: i32 = 8;
 /// How far above beta the evaluation must be, per ply of remaining depth.
@@ -258,7 +265,7 @@ impl<E: Evaluator> ThreadData<E> {
         for depth in 1..=max_depth {
             worker.seldepth = 0;
             worker.root_depth = depth;
-            let score = worker.alpha_beta(0, -INFINITY, INFINITY, depth, false);
+            let score = worker.aspiration(depth, outcome.score);
             if worker.stopped {
                 break;
             }
@@ -427,6 +434,42 @@ impl<E: Evaluator> Worker<'_, E> {
     #[inline]
     fn unmake(&mut self) {
         self.td.keys.pop();
+    }
+
+    /// Searches the root to `depth`, at first only inside a window around `previous`,
+    /// the score of the last iteration. A score outside the window only says on which
+    /// side the truth lies, so the window is widened there and the search repeated.
+    fn aspiration(&mut self, depth: i32, previous: i32) -> i32 {
+        let mut delta = ASPIRATION_DELTA + previous * previous / 16384;
+        let (mut alpha, mut beta) = (-INFINITY, INFINITY);
+        if depth >= ASPIRATION_MIN_DEPTH && delta <= ASPIRATION_MAX_DELTA {
+            alpha = (previous - delta).max(-INFINITY);
+            beta = (previous + delta).min(INFINITY);
+        }
+        loop {
+            let score = self.alpha_beta(0, alpha, beta, depth, false);
+            if self.stopped {
+                return score;
+            }
+            if score <= alpha {
+                beta = (alpha + beta) / 2;
+                alpha = (score - delta).max(-INFINITY);
+            } else if score >= beta {
+                beta = (score + delta).min(INFINITY);
+                // The move that failed high is the one to search first next time.
+                let line = &self.td.pv[0];
+                if line.len > 0 {
+                    self.root_best = line.moves[0];
+                }
+            } else {
+                return score;
+            }
+            delta += delta / 3;
+            if delta > ASPIRATION_MAX_DELTA {
+                alpha = -INFINITY;
+                beta = INFINITY;
+            }
+        }
     }
 
     /// The main search. A node with a window wider than one point is on the principal
