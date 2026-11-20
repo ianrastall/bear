@@ -6,7 +6,7 @@ The design is in [docs/architecture.md](docs/architecture.md): board representat
 
 ## Status
 
-Milestone M4 (selectivity) is complete. The search uses null-move pruning, late move reductions and pruning, exchange pruning, check extensions and aspiration windows. Bear plays standard chess and Chess960 through any UCI interface. M5 expands the history tables, time management and hand-crafted evaluation.
+Milestone M5 is in progress. Bear plays standard chess and Chess960 through any UCI interface. The hand-crafted evaluator now scores pawn structure, passed pawns, mobility and king safety alongside material and piece-square tables. The history and time-management changes are in strength testing.
 
 ## Building
 
@@ -55,6 +55,8 @@ perft suite <file> [--max-depth N]  check every line of an EPD file
 perft fuzz --oracle <engine> [--positions N] [--depth D] [--seed S] [--chess960]
 datagen openings --out <file> [--count N] [--plies P] [--seed S] [--depth D] [--max-cp C]
 datagen mates --out <file> [--count N] [--max-mate M] [--plies P] [--seed S]
+datagen selfplay --out <file> [--games N] [--nodes N] [--seed S] [--workers N]
+datagen tune --input <selfplay file> --out <weights.rs> [--epochs N]
 cargo xtask sprt --base <revision or engine file> [--new <engine file>] [--bounds <name>]
 ```
 
@@ -63,6 +65,8 @@ cargo xtask sprt --base <revision or engine file> [--new <engine file>] [--bound
 `datagen openings` writes balanced random opening positions for test matches. `books/bear-8ply.epd` was made with `--count 2000 --seed 2026`.
 
 `datagen mates` collects positions with a short forced mate from Bear's own games. `crates/engine-core/tests/mates.epd` holds 36 of them, and the release-mode test requires the search to find every one.
+
+`datagen selfplay` emits quiet positions from Bear's own games with the game ID and White's outcome. The node limit and per-game seed make the output reproducible across worker counts. `datagen tune` fits tapered evaluation weights with Adam, holds out whole games, and reports log loss before and after fitting. After a match confirms a fit, install the generated Rust source at `crates/engine-core/src/eval/hce/tuned.rs` and rebuild.
 
 `cargo xtask sprt` plays the working tree (or `--new`) against an earlier revision with fastchess until a sequential probability ratio test accepts or rejects the change. fastchess is found through `--fastchess`, the `FASTCHESS` environment variable or the path.
 

@@ -153,6 +153,8 @@ fn infinite_search_of_a_finished_game_still_waits_for_stop() {
 fn movetime_is_respected() {
     let mut bear = Bear::start();
     bear.send("position startpos");
+    bear.send("isready");
+    bear.read_until("readyok", WAIT);
     let start = Instant::now();
     bear.send("go movetime 300");
     bear.read_until("bestmove", WAIT);

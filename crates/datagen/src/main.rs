@@ -1,8 +1,9 @@
-//! Generates data from Bear's own play. For now that is opening positions for test
-//! matches and mate positions for the search tests; self-play training data is added
-//! with the neural network.
+//! Generates openings, mate positions and evaluation training data from Bear's play.
 
 #![forbid(unsafe_code)]
+
+mod selfplay;
+mod tune;
 
 use std::collections::HashSet;
 use std::fmt::Write as _;
@@ -117,7 +118,7 @@ fn openings(options: &Options) -> Result<(), String> {
         tt: &tt,
     };
     let limits = Limits::depth(options.depth);
-    let mut thread = ThreadData::new(Hce);
+    let mut thread = ThreadData::new(Hce::default());
 
     let mut seen = HashSet::new();
     let mut text = String::new();
@@ -164,7 +165,7 @@ fn mates(options: &Options) -> Result<(), String> {
     };
     let shallow = Limits::depth(3);
     let deep = Limits::depth(2 * options.max_mate - 1);
-    let mut thread = ThreadData::new(Hce);
+    let mut thread = ThreadData::new(Hce::default());
 
     // The same number of positions for each mate distance, as far as it divides.
     let distances = (options.max_mate - 1) as usize;
@@ -251,7 +252,9 @@ fn main() -> ExitCode {
             }
             on_worker(options, mates)
         }),
-        _ => Err(USAGE.to_string()),
+        Some("selfplay") => selfplay::run(&args[1..]),
+        Some("tune") => tune::run(&args[1..]),
+        _ => Err(format!("{USAGE}\n\n{}\n{}", selfplay::USAGE, tune::USAGE)),
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,

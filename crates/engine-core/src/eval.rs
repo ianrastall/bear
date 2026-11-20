@@ -5,7 +5,7 @@
 
 mod hce;
 
-pub use hce::Hce;
+pub use hce::{EvalFeatures, FEATURE_COUNT, Hce, MAX_PHASE, Params};
 
 use crate::Position;
 

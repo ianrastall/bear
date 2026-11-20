@@ -966,7 +966,7 @@ mod tests {
 
     fn search_fen(fen: &str, limits: &Limits) -> (Outcome, ThreadData<Hce>) {
         let (pos, ci) = Position::from_fen(fen).unwrap();
-        let mut td = ThreadData::new(Hce);
+        let mut td = ThreadData::new(Hce::default());
         td.set_position(&pos, &ci, &[]);
         let outcome = td.search(Env::new().shared(), limits, 0, |_| {});
         (outcome, td)
@@ -1102,7 +1102,7 @@ mod tests {
     #[test]
     fn repetition_inside_the_search_tree_is_a_draw() {
         let (pos, ci) = Position::startpos();
-        let mut td = ThreadData::new(Hce);
+        let mut td = ThreadData::new(Hce::default());
         td.set_position(&pos, &ci, &[]);
         let env = Env::new();
         let mut worker = worker(&mut td, env.shared());
@@ -1123,7 +1123,7 @@ mod tests {
 
         // The start position has occurred once before: not yet a draw.
         let (pos, ci, history) = shuffle(1);
-        let mut td = ThreadData::new(Hce);
+        let mut td = ThreadData::new(Hce::default());
         td.set_position(&pos, &ci, &history);
         assert!(!worker(&mut td, env.shared()).is_draw(0));
 
@@ -1146,7 +1146,7 @@ mod tests {
             history.push(pos.key());
             pos = pos.make(find_uci_move(&pos, &ci, text).unwrap(), &ci);
         }
-        let mut td = ThreadData::new(Hce);
+        let mut td = ThreadData::new(Hce::default());
         td.set_position(&pos, &ci, &history);
         let outcome = td.search(Env::new().shared(), &Limits::depth(3), 0, |_| {});
         assert!(outcome.score > 300, "{}", outcome.score);
@@ -1174,7 +1174,7 @@ mod tests {
     #[test]
     fn stop_flag_still_returns_a_move() {
         let (pos, ci) = Position::startpos();
-        let mut td = ThreadData::new(Hce);
+        let mut td = ThreadData::new(Hce::default());
         td.set_position(&pos, &ci, &[]);
         let env = Env::new();
         env.stop.store(true, Ordering::Relaxed);
@@ -1187,7 +1187,7 @@ mod tests {
     #[cfg_attr(miri, ignore)]
     fn reports_every_iteration_with_a_legal_line() {
         let (pos, ci) = Position::startpos();
-        let mut td = ThreadData::new(Hce);
+        let mut td = ThreadData::new(Hce::default());
         td.set_position(&pos, &ci, &[]);
         let mut depths = Vec::new();
         td.search(Env::new().shared(), &Limits::depth(4), 0, |report| {

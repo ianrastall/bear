@@ -818,6 +818,10 @@ Killers, countermoves and the check extension get `[−5, 0]` removal tests duri
 
 Perft and fuzzing results for M1 are in 7.1.
 
+**M5 evaluation trials.** The expanded hand-crafted evaluator passed a `[0, 10]` SPRT at 8+0.08 on two search baselines. On the experimental history and time-management stack it won 140 games, drew 35 and lost 25, for +228 ± 47 Elo. With the published M4 search it won 156 games, drew 25 and lost 35, for +220 ± 55 Elo. Both tests reached an LLR of 2.96 using paired 8-ply openings and 16 MiB hash. The evaluator on the M4 search benches at 4,154,595 nodes at depth 14.
+
+The first Texel dataset used seed `20261120`, 600 Bear self-play games and a 2,500-node search limit per move. The fit used 10,446 quiet positions for training and 2,380 from distinct held-out games. The initial 60-epoch candidate reduced the held-out log loss from 0.483802 to 0.476134 and scored 27.5% against the untuned evaluator in a stopped 40-game trial. The untuned weights are used while the remaining strength tests run.
+
 **M4.** The individual tests used fastchess 1.8.2 at 8+0.08, with `[0, 10]` Elo bounds. No recorded game in the tests below ended in a crash, illegal move or time loss.
 
 | Step | Games | Elo | Outcome |

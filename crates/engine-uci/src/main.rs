@@ -217,8 +217,14 @@ mod tests {
 
     #[test]
     fn eval_command() {
+        use bear_core::eval::{Evaluator, Hce};
+        let (pos, _) = bear_core::Position::startpos();
+        let expected = Hce::default().evaluate(&pos);
         let out = session("eval\n");
-        assert_eq!(out, "Static evaluation: 10 cp for the side to move\n");
+        assert_eq!(
+            out,
+            format!("Static evaluation: {expected} cp for the side to move\n")
+        );
     }
 
     #[test]

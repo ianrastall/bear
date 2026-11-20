@@ -62,7 +62,7 @@ pub fn run(depth: i32) -> BenchResult {
     let mut nodes = 0;
     for fen in POSITIONS {
         let (pos, ci) = Position::from_fen(fen).expect("bench positions are valid");
-        let mut td = ThreadData::new(Hce);
+        let mut td = ThreadData::new(Hce::default());
         td.set_position(&pos, &ci, &[]);
         tt.clear();
         nodes += td.search(shared, &limits, 0, |_| {}).nodes;

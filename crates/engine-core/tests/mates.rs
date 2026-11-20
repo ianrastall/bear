@@ -55,7 +55,7 @@ fn solve(longest: i32) -> usize {
             continue;
         }
         let (pos, ci) = Position::from_fen(fen).unwrap_or_else(|e| panic!("{fen}: {e}"));
-        let mut td = ThreadData::new(Hce);
+        let mut td = ThreadData::new(Hce::default());
         td.set_position(&pos, &ci, &[]);
         tt.clear();
         stop.store(false, Ordering::Relaxed);

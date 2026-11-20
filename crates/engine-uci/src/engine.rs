@@ -78,7 +78,7 @@ impl Engine {
             pos,
             castling,
             history: Vec::new(),
-            thread: ThreadData::new(Hce),
+            thread: ThreadData::new(Hce::default()),
             tt: TranspositionTable::new(TranspositionTable::DEFAULT_MB),
             move_overhead: DEFAULT_MOVE_OVERHEAD,
             chess960: false,
@@ -91,7 +91,7 @@ impl Engine {
             Command::Uci => self.identify(),
             Command::IsReady => say!(self.out, "readyok"),
             Command::UciNewGame => {
-                self.thread = ThreadData::new(Hce);
+                self.thread = ThreadData::new(Hce::default());
                 self.tt.clear();
             }
             Command::Position { fen, moves } => self.set_position(fen.as_deref(), &moves),
