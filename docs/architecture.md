@@ -325,10 +325,10 @@ Scores are `i32` in the search and `i16` in the TT. `MATE = 32000`, `MATE_BOUND 
 
 **Iterative deepening and aspiration.**
 
-- For depth 5 and above, the window is `[avg − δ, avg + δ]` with `δ = 12 + avg² / 16384`.
-- Fail low: `β = (α + β) / 2`, `α = max(avg − δ, −INF)`.
-- Fail high: `β = min(avg + δ, INF)`, and the re-search depth drops by one, at most three times.
-- After either: `δ += δ / 3`. Once `δ > 1000` the window is fully open.
+- From depth 5, centre the window on the previous iteration's score `prev`, with half-width `δ = 12 + prev² / 16384`.
+- Fail low with score `s`: `β = (α + β) / 2`, `α = max(s − δ, −INF)`.
+- Fail high with score `s`: `β = min(s + δ, INF)`. Try the fail-high move first on the next search.
+- Keep the iteration depth on every re-search and increase `δ` by `δ / 3` after either failure. Use a full window whenever `δ > 1000`.
 
 **Node order in `search::<N>(ply, α, β, depth, cut_node)`:**
 
@@ -817,6 +817,28 @@ Killers, countermoves and the check extension get `[−5, 0]` removal tests duri
 ### 7.4 Milestone results
 
 Perft and fuzzing results for M1 are in 7.1.
+
+**M4.** The individual tests used fastchess 1.8.2 at 8+0.08, with `[0, 10]` Elo bounds. No recorded game in the tests below ended in a crash, illegal move or time loss.
+
+| Step | Games | Elo | Outcome |
+|---|---:|---:|---|
+| Reverse futility pruning | 300 | +122 ± 35 | Passed |
+| Null-move pruning with verification | 694 | +46 ± 21 | Passed |
+| Late move reductions | 228 | +181 ± 41 | Passed |
+| Quiet history ordering and reductions | 226 | +175 ± 42 | Passed |
+| Late move pruning | 284 | +132 ± 36 | Passed |
+| Futility pruning | 2,040 | −0.2 ± 12 | Stopped undecided |
+| SEE pruning, on top of late move pruning | 1,184 | +28 ± 16 | Passed |
+| Razoring, on the experimental futility and SEE build | 2,260 | +4.8 ± 11 | Stopped undecided |
+| Internal iterative reduction, on top of SEE pruning | 3,002 | +5.9 ± 10 | Stopped undecided |
+| Singular extensions with multi-cut, on the experimental IIR and check-extension build | 3,090 | −5.1 ± 9.5 | Failed |
+| Check extension, on top of SEE pruning | 1,476 | +24 ± 14 | Passed |
+| Countermoves, on top of the check extension | 580 | +11 ± 22 | Stopped undecided |
+| Aspiration windows, tested independently on top of SEE pruning | 1,054 | +31 ± 17 | Passed |
+
+The local tags `parked-futility-razoring`, `parked-iir-singular` and `parked-countermoves-m4` retain the inconclusive or rejected experiments. The countermove test resumed from 438 games and was stopped at a reported LLR of 0.41, below the 2.94 acceptance boundary.
+
+The combined check-extension and aspiration build (`ff87351`) benches at 4,137,489 nodes at depth 14 and solves all 36 positions in the release mate suite within 5,000,000 nodes each. On Windows on an Intel Core i7-10700, single-threaded `position startpos` followed by `go depth 20` with a fresh 16 MiB hash took 16.6 seconds and 16,216,436 nodes. The earlier SEE-pruning build (`ed5b230`) took 15.7 seconds and 14,860,955 nodes with the same setup. The 40+0.4 confirmation compares `ff87351` with the last M3 search (`11cca68`).
 
 **M3.** Every test is `cargo xtask sprt` at 8+0.08 with fastchess 1.8.2, each step against the one before it. No game in any of them ended by a crash, an illegal move or a time loss.
 

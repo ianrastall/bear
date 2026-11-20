@@ -6,7 +6,7 @@ The design is in [docs/architecture.md](docs/architecture.md): board representat
 
 ## Status
 
-Milestone M4 (selectivity) is in progress. Bear plays complete games of standard chess and Chess960 through any UCI interface. The search has a transposition table, staged move ordering and the usual pruning and reductions; the evaluation is still material and piece-square tables, so it is far from its target strength.
+Milestone M4 (selectivity) is awaiting its long time control confirmation. The accepted search changes include null-move pruning, late move reductions and pruning, exchange pruning, check extensions and aspiration windows. Bear plays standard chess and Chess960 through any UCI interface and evaluates positions using material and piece-square tables.
 
 ## Building
 
