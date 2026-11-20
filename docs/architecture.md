@@ -840,9 +840,22 @@ The published evaluator (`e25093c`, bench 4,154,595) played the same 120-game ga
 | Blunder 7.6.0 64-bit | 34 | 3 | 3 |
 | Weiss 1.0 64-bit | 16 | 13 | 11 |
 
-A second Texel dataset used 2,000 Bear games at 5,000 nodes per move with seed `20261121`. It yielded 36,395 training positions and 9,109 held-out positions. The constrained fit reduced held-out log loss from 0.489372 to 0.488397. The larger fit and individual search changes remain subject to their strength tests.
+A second Texel dataset used 2,000 Bear games at 5,000 nodes per move with seed `20261121`. It yielded 36,395 training positions and 9,109 held-out positions. The constrained fit reduced held-out log loss from 0.489372 to 0.488397. At the 720-game report against the published hand-written weights, it had 252 wins, 239 draws and 229 losses for +11 ± 21 Elo and an LLR of 0.51. The `[0, 10]` SPRT acceptance boundary was 2.94.
+
+The individual history trials used `[0, 10]` SPRTs at 8+0.08. These are the last reported scores for each candidate on the expanded evaluator.
+
+| Candidate | Reference search | Games | Elo | LLR |
+|---|---|---:|---:|---:|
+| Capture history | Published M4 search | 140 | −7 ± 43 | −0.17 |
+| Capture history with quiescence updates | Published M4 search | 60 | 0 ± 71 | −0.02 |
+| Continuation history | Experimental capture history | 220 | +2 ± 39 | −0.06 |
+| Damped correction history | Published M4 search | 180 | −12 ± 41 | −0.29 |
 
 The adaptive clock passed its standalone `[0, 10]` SPRT at 8+0.08 against `e25093c` with 319 wins, 258 draws and 233 losses in 810 games. The result was +37 ± 18 Elo and a final LLR of 2.95. There were no crashes, illegal moves or time losses. The depth-14 bench remains 4,154,595 nodes.
+
+The published evaluator and adaptive clock (`5a5b8ea`) passed the `[0, 10]` SPRT against M4 (`8469a67`) at 40+0.4 with 140 wins, 20 draws and 8 losses in 168 games. That is an 89.29% score, +368 ± 74 Elo and a final LLR of 2.96. The match used paired `bear-8ply.epd` openings, seed `4378986340156334659` and 16 MiB hash. It resumed from a 40-game checkpoint with concurrency raised from 8 to 14. There were no crashes, illegal moves or time losses.
+
+M5 remains open until capture history, continuation history, correction history and a fitted weight set each pass their strength gate.
 
 **M4.** The individual tests used fastchess 1.8.2 at 8+0.08, with `[0, 10]` Elo bounds. No recorded game in the tests below ended in a crash, illegal move or time loss.
 
