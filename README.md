@@ -6,7 +6,7 @@ The design is in [docs/architecture.md](docs/architecture.md): board representat
 
 ## Status
 
-Milestone M4 (selectivity) is awaiting its long time control confirmation. The accepted search changes include null-move pruning, late move reductions and pruning, exchange pruning, check extensions and aspiration windows. Bear plays standard chess and Chess960 through any UCI interface and evaluates positions using material and piece-square tables.
+Milestone M4 (selectivity) is complete. The search uses null-move pruning, late move reductions and pruning, exchange pruning, check extensions and aspiration windows. Bear plays standard chess and Chess960 through any UCI interface. M5 expands the history tables, time management and hand-crafted evaluation.
 
 ## Building
 

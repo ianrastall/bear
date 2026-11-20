@@ -838,7 +838,9 @@ Perft and fuzzing results for M1 are in 7.1.
 
 The local tags `parked-futility-razoring`, `parked-iir-singular` and `parked-countermoves-m4` retain the inconclusive or rejected experiments. The countermove test resumed from 438 games and was stopped at a reported LLR of 0.41, below the 2.94 acceptance boundary.
 
-The combined check-extension and aspiration build (`ff87351`) benches at 4,137,489 nodes at depth 14 and solves all 36 positions in the release mate suite within 5,000,000 nodes each. On Windows on an Intel Core i7-10700, single-threaded `position startpos` followed by `go depth 20` with a fresh 16 MiB hash took 16.6 seconds and 16,216,436 nodes. The earlier SEE-pruning build (`ed5b230`) took 15.7 seconds and 14,860,955 nodes with the same setup. The 40+0.4 confirmation compares `ff87351` with the last M3 search (`11cca68`).
+The combined check-extension and aspiration build (`ff87351`) benches at 4,137,489 nodes at depth 14 and solves all 36 positions in the release mate suite within 5,000,000 nodes each. On Windows on an Intel Core i7-10700, single-threaded `position startpos` followed by `go depth 20` with a fresh 16 MiB hash took 16.6 seconds and 16,216,436 nodes. The earlier SEE-pruning build (`ed5b230`) took 15.7 seconds and 14,860,955 nodes under the same match load.
+
+The accepted M4 build (`ff87351`) passed the `[0, 10]` SPRT at 40+0.4 against the last M3 search (`11cca68`). It won 146 games, drew four and lost zero for a 98.67% score and a final LLR of 2.95. The match used paired openings from `books/bear-8ply.epd` and a 16 MiB hash, and resumed from an 18-game checkpoint with concurrency raised from 7 to 14. There were no crashes, illegal moves or time losses. M4 closed on 20 November 2026 with the accepted changes above.
 
 **M3.** Every test is `cargo xtask sprt` at 8+0.08 with fastchess 1.8.2, each step against the one before it. No game in any of them ended by a crash, an illegal move or a time loss.
 
