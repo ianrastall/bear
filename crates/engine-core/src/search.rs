@@ -220,6 +220,11 @@ impl PvLine {
 }
 
 /// Everything one search thread owns across searches.
+///
+/// Threads keep their data side by side, and some fields here change at every node,
+/// so each thread's data starts on its own pair of cache lines; otherwise threads
+/// would keep taking those lines from one another.
+#[repr(align(128))]
 pub struct ThreadData<E: Evaluator> {
     eval: E,
     /// The position at each ply of the current line; index 0 is the root.
@@ -294,6 +299,7 @@ impl<E: Evaluator> ThreadData<E> {
         self.keys.reserve(MAX_PLY + 1);
         // Killers belong to one tree; the next search starts a different one.
         self.killers.fill([None; 2]);
+        self.eval.set_root(&self.positions[0]);
 
         let mut worker = Worker {
             td: self,
@@ -543,6 +549,7 @@ impl<E: Evaluator> Worker<'_, E> {
     fn make(&mut self, ply: usize, mv: Move) {
         let (parents, children) = self.td.positions.split_at_mut(ply + 1);
         parents[ply].make_into(mv, &self.td.castling, &mut children[0]);
+        self.td.eval.made(ply + 1, &parents[ply], &children[0]);
         self.td.keys.push(children[0].key());
         self.td.moved[ply + 1] = parents[ply]
             .piece_on(mv.from())
@@ -555,6 +562,7 @@ impl<E: Evaluator> Worker<'_, E> {
     fn make_null(&mut self, ply: usize) {
         let (parents, children) = self.td.positions.split_at_mut(ply + 1);
         parents[ply].make_null_into(&mut children[0]);
+        self.td.eval.made(ply + 1, &parents[ply], &children[0]);
         self.td.keys.push(children[0].key());
         self.td.moved[ply + 1] = None;
     }
@@ -640,7 +648,7 @@ impl<E: Evaluator> Worker<'_, E> {
                 return 1 - (self.nodes & 2) as i32;
             }
             if ply >= MAX_PLY {
-                return self.td.eval.evaluate(&self.td.positions[ply]);
+                return self.td.eval.evaluate_at(ply, &self.td.positions[ply]);
             }
             // No line from here can beat a mate already found closer to the root.
             alpha = alpha.max(-MATE + ply as i32);
@@ -683,7 +691,7 @@ impl<E: Evaluator> Worker<'_, E> {
             NO_EVAL
         } else {
             if raw_eval == NO_EVAL {
-                raw_eval = self.td.eval.evaluate(&self.td.positions[ply]);
+                raw_eval = self.td.eval.evaluate_at(ply, &self.td.positions[ply]);
             }
             let corrected = self.corrected(ply, raw_eval);
             eval = corrected;
@@ -991,7 +999,7 @@ impl<E: Evaluator> Worker<'_, E> {
             return 1 - (self.nodes & 2) as i32;
         }
         if ply >= MAX_PLY {
-            return self.td.eval.evaluate(&self.td.positions[ply]);
+            return self.td.eval.evaluate_at(ply, &self.td.positions[ply]);
         }
 
         let is_pv = beta - alpha > 1;
@@ -1018,7 +1026,7 @@ impl<E: Evaluator> Worker<'_, E> {
             // The side to move may decline every capture and keep the static score.
             // `static_eval` stays the uncorrected one, which is what the table keeps.
             if static_eval == NO_EVAL {
-                static_eval = self.td.eval.evaluate(&self.td.positions[ply]);
+                static_eval = self.td.eval.evaluate_at(ply, &self.td.positions[ply]);
             }
             best = self.corrected(ply, static_eval);
             if best >= beta {
