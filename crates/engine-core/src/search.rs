@@ -787,6 +787,7 @@ impl<E: Evaluator> Worker<'_, E> {
         // Quiet moves searched without causing a cutoff.
         let mut quiets = [None; MAX_QUIETS];
         let mut quiet_count = 0;
+        let mut captures = MoveList::new();
         // Quiet moves the picker has produced, searched or not.
         let mut quiets_seen = 0;
         // Moves may be left unsearched only once something has been found that does
@@ -906,12 +907,27 @@ impl<E: Evaluator> Worker<'_, E> {
                     if score >= beta {
                         if !is_noisy(mv) {
                             self.remember_cutoff(ply, mv, depth, &quiets[..quiet_count]);
+                        } else if mv.is_capture() {
+                            self.td.history.update_capture(
+                                &self.td.positions[ply],
+                                mv,
+                                history::bonus(depth),
+                            );
+                        }
+                        for earlier in captures.iter() {
+                            self.td.history.update_capture(
+                                &self.td.positions[ply],
+                                earlier,
+                                -history::malus(depth),
+                            );
                         }
                         break;
                     }
                 }
             }
-            if !is_noisy(mv) && quiet_count < MAX_QUIETS {
+            if mv.is_capture() {
+                captures.push(mv);
+            } else if !is_noisy(mv) && quiet_count < MAX_QUIETS {
                 quiets[quiet_count] = Some(mv);
                 quiet_count += 1;
             }

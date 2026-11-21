@@ -7,7 +7,7 @@
 //! In check every evasion comes from one list. Moves are pseudo-legal; the caller
 //! checks legality.
 
-use crate::history::History;
+use crate::history::{History, capture_victim};
 use crate::movegen::{MoveList, ScoredMove, gen_evasions, gen_noisy, gen_quiet};
 use crate::{CastlingInfo, Move, PieceType, Position};
 
@@ -54,23 +54,18 @@ pub struct MovePicker {
 /// Added to the score of a capturing evasion to put it above every quiet one.
 const EVASION_NOISY: i32 = 1 << 20;
 
-/// Most valuable victim first, then least valuable attacker; promotions by piece.
-fn noisy_score(pos: &Position, mv: Move) -> i32 {
+/// Order by victim and promotion value, with capture history within those groups.
+fn noisy_score(pos: &Position, mv: Move, history: &History) -> i32 {
     let mut score = 0;
     if mv.is_capture() {
-        let victim = if mv.is_en_passant() {
-            PieceType::Pawn
-        } else {
-            pos.piece_on(mv.to())
-                .map_or(PieceType::Pawn, |piece| piece.piece_type())
-        };
-        let attacker = pos
-            .piece_on(mv.from())
-            .map_or(PieceType::Pawn, |piece| piece.piece_type());
-        score += 1_000 + 16 * (victim.index() as i32 + 1) - attacker.index() as i32;
+        let victim = capture_victim(pos, mv);
+        let attacker = pos.piece_on(mv.from()).expect("capture has a mover");
+        score += 16
+            * (1_000 + 16 * (victim.index() as i32 + 1) - attacker.piece_type().index() as i32)
+            + history.capture(attacker, mv, victim) / 256;
     }
     if let Some(promotion) = mv.promotion() {
-        score += 100 * (promotion.index() as i32 + 1);
+        score += 1_600 * (promotion.index() as i32 + 1);
     }
     score
 }
@@ -167,7 +162,7 @@ impl MovePicker {
                 Stage::GenNoisy => {
                     gen_noisy(pos, &mut self.list);
                     for scored in self.list.as_mut_slice() {
-                        scored.score = noisy_score(pos, scored.mv);
+                        scored.score = noisy_score(pos, scored.mv, history);
                     }
                     self.stage = Stage::GoodNoisy;
                 }
@@ -242,7 +237,7 @@ impl MovePicker {
                     for scored in self.list.as_mut_slice() {
                         // Captures and promotions first, whatever the history says.
                         scored.score = if is_noisy(scored.mv) || scored.mv.is_promotion() {
-                            EVASION_NOISY + noisy_score(pos, scored.mv)
+                            EVASION_NOISY + noisy_score(pos, scored.mv, history)
                         } else {
                             history.quiet(pos, scored.mv)
                         };

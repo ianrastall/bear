@@ -1,7 +1,7 @@
 //! What the search has learned about which quiet moves tend to be good, kept from
 //! node to node and from one search to the next.
 
-use crate::{Move, Piece, Position, Square};
+use crate::{Move, Piece, PieceType, Position, Square};
 
 /// No history score goes beyond this in either direction.
 pub const HISTORY_MAX: i32 = 16_384;
@@ -28,15 +28,18 @@ pub fn malus(depth: i32) -> i32 {
 }
 
 /// Scores for quiet moves by side to move, from and to square, and whether each of
-/// those squares is attacked by the opponent.
+/// those squares is attacked by the opponent; and for captures by the moving piece,
+/// the target square and the type of piece taken.
 pub struct History {
     main: Box<[[[[i16; 2]; 2]; 4096]]>,
+    captures: Box<[[[i16; PieceType::COUNT]; 64]]>,
 }
 
 impl History {
     pub fn new() -> History {
         History {
             main: vec![[[[0; 2]; 2]; 4096]; 2].into_boxed_slice(),
+            captures: vec![[[0; PieceType::COUNT]; 64]; Piece::COUNT].into_boxed_slice(),
         }
     }
 
@@ -63,6 +66,36 @@ impl History {
     pub fn update_quiet(&mut self, pos: &Position, mv: Move, bonus: i32) {
         let (stm, squares, from, to) = History::slot(pos, mv);
         gravity::<HISTORY_MAX>(&mut self.main[stm][squares][from][to], bonus);
+    }
+
+    /// The score of `piece` capturing a `victim` with `mv`.
+    #[inline]
+    pub fn capture(&self, piece: Piece, mv: Move, victim: PieceType) -> i32 {
+        self.captures[piece.index()][mv.to().index()][victim.index()] as i32
+    }
+
+    /// Rewards (or, with a negative `bonus`, penalises) the capture `mv` in `pos`.
+    #[inline]
+    pub fn update_capture(&mut self, pos: &Position, mv: Move, bonus: i32) {
+        let attacker = pos.piece_on(mv.from()).expect("capture has a mover");
+        let victim = capture_victim(pos, mv);
+        gravity::<HISTORY_MAX>(
+            &mut self.captures[attacker.index()][mv.to().index()][victim.index()],
+            bonus,
+        );
+    }
+}
+
+/// The type of piece the capture `mv` takes. En passant takes a pawn on the square
+/// behind the destination.
+#[inline]
+pub(crate) fn capture_victim(pos: &Position, mv: Move) -> PieceType {
+    if mv.is_en_passant() {
+        PieceType::Pawn
+    } else {
+        pos.piece_on(mv.to())
+            .expect("capture has a victim")
+            .piece_type()
     }
 }
 
@@ -192,6 +225,20 @@ mod tests {
         }
         let most = correction.adjustment(&pos, None);
         assert!(most > 0 && most <= 256 * 384 / 512, "{most}");
+    }
+
+    #[test]
+    fn captures_are_scored_by_mover_target_and_victim() {
+        let mut history = History::new();
+        let (pos, ci) = Position::from_fen("4k3/8/8/3pP3/2n5/1P6/8/4K3 w - d6 0 1").unwrap();
+        let takes_knight = find_uci_move(&pos, &ci, "b3c4").unwrap();
+        let en_passant = find_uci_move(&pos, &ci, "e5d6").unwrap();
+        history.update_capture(&pos, takes_knight, 400);
+        history.update_capture(&pos, en_passant, -300);
+        let score = |mv: Move, victim| history.capture(Piece::WhitePawn, mv, victim);
+        assert_eq!(score(takes_knight, PieceType::Knight), 400);
+        assert_eq!(score(takes_knight, PieceType::Pawn), 0);
+        assert_eq!(score(en_passant, PieceType::Pawn), -300);
     }
 
     #[test]
