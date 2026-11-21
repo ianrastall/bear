@@ -53,10 +53,7 @@ pub struct BenchResult {
 pub fn run(depth: i32) -> BenchResult {
     let stop = AtomicBool::new(false);
     let tt = TranspositionTable::new(TranspositionTable::DEFAULT_MB);
-    let shared = Shared {
-        stop: &stop,
-        tt: &tt,
-    };
+    let shared = Shared::new(&stop, &tt);
     let limits = Limits::depth(depth);
     let start = Instant::now();
     let mut nodes = 0;

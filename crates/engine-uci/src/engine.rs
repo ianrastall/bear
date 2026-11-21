@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 use bear_core::eval::Hce;
 use bear_core::movegen::find_uci_move;
 use bear_core::perft::divide;
-use bear_core::search::{Report, Shared, ThreadData, mate_in};
+use bear_core::search::{Outcome, Report, Shared, ThreadData, mate_in, vote};
 use bear_core::time::Limits;
 use bear_core::tt::TranspositionTable;
 use bear_core::{CastlingInfo, Position};
@@ -23,6 +23,9 @@ pub const AUTHOR: &str = "Ian Rastall";
 
 const DEFAULT_MOVE_OVERHEAD: u64 = 10;
 const MAX_MOVE_OVERHEAD: u64 = 5000;
+const MAX_THREADS: usize = 256;
+/// Helper threads recurse once per ply like the coordinator, so they get as much stack.
+const HELPER_STACK: usize = 16 << 20;
 
 /// Where protocol output goes. Clones share one destination, and each line is written
 /// and flushed under a lock so that lines from different threads never interleave.
@@ -64,7 +67,8 @@ pub struct Engine {
     castling: CastlingInfo,
     /// Keys of every position before the current one, oldest first.
     history: Vec<u64>,
-    thread: ThreadData<Hce>,
+    /// One for each search thread; the first is the coordinator's own.
+    threads: Vec<ThreadData<Hce>>,
     tt: TranspositionTable,
     move_overhead: u64,
     chess960: bool,
@@ -78,7 +82,7 @@ impl Engine {
             pos,
             castling,
             history: Vec::new(),
-            thread: ThreadData::new(Hce::default()),
+            threads: vec![ThreadData::new(Hce::default())],
             tt: TranspositionTable::new(TranspositionTable::DEFAULT_MB),
             move_overhead: DEFAULT_MOVE_OVERHEAD,
             chess960: false,
@@ -91,8 +95,9 @@ impl Engine {
             Command::Uci => self.identify(),
             Command::IsReady => say!(self.out, "readyok"),
             Command::UciNewGame => {
-                self.thread = ThreadData::new(Hce::default());
-                self.tt.clear();
+                let count = self.threads.len();
+                self.set_threads(count);
+                self.tt.clear_parallel(count);
             }
             Command::Position { fen, moves } => self.set_position(fen.as_deref(), &moves),
             Command::Go(limits) => {
@@ -123,6 +128,10 @@ impl Engine {
         );
         say!(
             self.out,
+            "option name Threads type spin default 1 min 1 max {MAX_THREADS}"
+        );
+        say!(
+            self.out,
             "option name Move Overhead type spin default {DEFAULT_MOVE_OVERHEAD} min 0 max {MAX_MOVE_OVERHEAD}"
         );
         say!(
@@ -147,6 +156,10 @@ impl Engine {
                 }
                 Err(_) => say!(self.out, "info string Hash needs a number, got {value}"),
             },
+            ("threads", Some(value)) => match value.parse::<usize>() {
+                Ok(count) => self.set_threads(count.clamp(1, MAX_THREADS)),
+                Err(_) => say!(self.out, "info string Threads needs a number, got {value}"),
+            },
             ("move overhead", Some(value)) => match value.parse::<u64>() {
                 Ok(ms) => self.move_overhead = ms.min(MAX_MOVE_OVERHEAD),
                 Err(_) => say!(
@@ -157,6 +170,13 @@ impl Engine {
             ("uci_chess960", Some(value)) => self.chess960 = value.eq_ignore_ascii_case("true"),
             _ => say!(self.out, "info string unknown option {name}"),
         }
+    }
+
+    /// Replaces every thread's state with a fresh one, `count` threads in all.
+    fn set_threads(&mut self, count: usize) {
+        self.threads.clear();
+        self.threads
+            .resize_with(count, || ThreadData::new(Hce::default()));
     }
 
     /// Sets up `fen` (the starting position when `None`) and plays `moves` on it. On a
@@ -189,25 +209,76 @@ impl Engine {
         self.history = history;
     }
 
+    /// Searches on every thread. The main thread keeps the clock and reports; the
+    /// helpers search the same position without limits until it has finished, and
+    /// then the threads vote on the move to play.
     fn go(&mut self, limits: &Limits, stop: &AtomicBool) {
-        let shared = Shared { stop, tt: &self.tt };
         let out = &self.out;
         let chess960 = self.chess960;
-        self.thread
-            .set_position(&self.pos, &self.castling, &self.history);
-        let outcome = self
-            .thread
-            .search(shared, limits, self.move_overhead, |report| {
+        let overhead = self.move_overhead;
+        let tt = &self.tt;
+        let counters = Shared::counters(self.threads.len());
+        // Helpers stop when this is set, once the main thread has finished.
+        let halt = AtomicBool::new(false);
+        let helper_limits = Limits {
+            depth: limits.depth,
+            ..Limits::default()
+        };
+        for thread in &mut self.threads {
+            thread.set_position(&self.pos, &self.castling, &self.history);
+        }
+        let (main, helpers) = self
+            .threads
+            .split_first_mut()
+            .expect("there is always a main thread");
+
+        let outcomes: Vec<Outcome> = std::thread::scope(|scope| {
+            let (counters, halt, helper_limits) = (&counters, &halt, &helper_limits);
+            let running: Vec<_> = (helpers.iter_mut().enumerate())
+                .map(|(index, thread)| {
+                    let shared = Shared {
+                        stop: halt,
+                        tt,
+                        counters,
+                        thread: index + 1,
+                    };
+                    std::thread::Builder::new()
+                        .name(format!("helper {}", index + 1))
+                        .stack_size(HELPER_STACK)
+                        .spawn_scoped(scope, move || {
+                            thread.search(shared, helper_limits, 0, |_| {})
+                        })
+                        .expect("a helper thread can be started")
+                })
+                .collect();
+
+            let shared = Shared {
+                stop,
+                tt,
+                counters,
+                thread: 0,
+            };
+            let first = main.search(shared, limits, overhead, |report| {
                 print_info(out, report, chess960);
             });
 
-        // An infinite search may not answer until it is told to stop, even if it has
-        // nothing left to search.
-        if limits.infinite {
-            while !stop.load(Ordering::Relaxed) {
-                std::thread::sleep(Duration::from_millis(1));
+            // An infinite search may not answer until it is told to stop, even if it
+            // has nothing left to search.
+            if limits.infinite {
+                while !stop.load(Ordering::Relaxed) {
+                    std::thread::sleep(Duration::from_millis(1));
+                }
             }
-        }
+            halt.store(true, Ordering::Relaxed);
+            std::iter::once(first)
+                .chain(
+                    running
+                        .into_iter()
+                        .map(|helper| helper.join().expect("a helper thread does not panic")),
+                )
+                .collect()
+        });
+        let outcome = outcomes[vote(&outcomes)];
 
         match (outcome.best, outcome.ponder) {
             (Some(best), Some(ponder)) => {
@@ -237,12 +308,12 @@ impl Engine {
     }
 
     fn print_eval(&mut self) {
-        self.thread
-            .set_position(&self.pos, &self.castling, &self.history);
+        let thread = &mut self.threads[0];
+        thread.set_position(&self.pos, &self.castling, &self.history);
         say!(
             self.out,
             "Static evaluation: {} cp for the side to move",
-            self.thread.evaluate_root()
+            thread.evaluate_root()
         );
     }
 

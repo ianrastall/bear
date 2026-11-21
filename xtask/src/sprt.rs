@@ -15,6 +15,9 @@ options:
   --bounds <name>      early = [0, 10] (default), standard = [0, 5], late = [0, 3],
                        regress = [-5, 0]
   --tc <time control>  default 8+0.08
+  --threads <n>        search threads for both engines; default 1
+  --new-threads <n>    search threads for `new` alone
+  --base-threads <n>   search threads for `base` alone
   --concurrency <n>    games played at once; default is one less than half the
                        logical processors
   --fastchess <path>   default: the FASTCHESS environment variable, then `fastchess`
@@ -30,9 +33,20 @@ struct Options {
     new: Option<String>,
     elo: (i32, i32),
     tc: String,
+    /// Search threads for `new` and for `base`.
+    threads: (usize, usize),
     concurrency: usize,
     fastchess: String,
     out: PathBuf,
+}
+
+/// A positive number given as an option's value.
+fn count(value: &str) -> Result<usize, String> {
+    value
+        .parse::<usize>()
+        .ok()
+        .filter(|&n| n > 0)
+        .ok_or_else(|| format!("bad count {value}"))
 }
 
 fn parse(args: &[String]) -> Result<Options, String> {
@@ -43,6 +57,7 @@ fn parse(args: &[String]) -> Result<Options, String> {
         new: None,
         elo: (0, 10),
         tc: "8+0.08".to_string(),
+        threads: (1, 1),
         concurrency: default_concurrency,
         fastchess: std::env::var("FASTCHESS").unwrap_or_else(|_| "fastchess".to_string()),
         out: std::env::temp_dir().join("bear-sprt"),
@@ -65,6 +80,12 @@ fn parse(args: &[String]) -> Result<Options, String> {
                 }
             }
             "--tc" => options.tc = value.clone(),
+            "--threads" => {
+                let n = count(value)?;
+                options.threads = (n, n);
+            }
+            "--new-threads" => options.threads.0 = count(value)?,
+            "--base-threads" => options.threads.1 = count(value)?,
             "--concurrency" => {
                 options.concurrency = value
                     .parse::<usize>()
@@ -217,8 +238,9 @@ fn sprt(args: &[String]) -> Result<ExitCode, String> {
     };
 
     let (elo0, elo1) = options.elo;
+    let (new_threads, base_threads) = options.threads;
     println!(
-        "new:  {}\nbase: {}\nSPRT [{elo0}, {elo1}] at {}, {} games at once",
+        "new:  {} ({new_threads} threads)\nbase: {} ({base_threads} threads)\nSPRT [{elo0}, {elo1}] at {}, {} games at once",
         new.display(),
         base.display(),
         options.tc,
@@ -227,7 +249,9 @@ fn sprt(args: &[String]) -> Result<ExitCode, String> {
 
     let status = Command::new(&options.fastchess)
         .args(["-engine", &format!("cmd={}", new.display()), "name=new"])
+        .arg(format!("option.Threads={new_threads}"))
         .args(["-engine", &format!("cmd={}", base.display()), "name=base"])
+        .arg(format!("option.Threads={base_threads}"))
         .args(["-each", &format!("tc={}", options.tc), "proto=uci"])
         .arg("option.Hash=16")
         .args(["-openings", &format!("file={}", book.display())])

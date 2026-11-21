@@ -132,6 +132,21 @@ fn infinite_search_waits_for_stop_and_answers_isready_meanwhile() {
 }
 
 #[test]
+fn threaded_infinite_search_stops_on_request() {
+    let mut bear = Bear::start();
+    bear.send("setoption name Threads value 4");
+    bear.send("position startpos");
+    bear.send("go infinite");
+    bear.read_until("info depth 6", WAIT);
+    bear.send("stop");
+    let lines = bear.read_until("bestmove", WAIT);
+    assert!(lines.last().unwrap().len() >= "bestmove e2e4".len());
+    bear.send("go movetime 200");
+    bear.read_until("bestmove", WAIT);
+    bear.quit();
+}
+
+#[test]
 fn infinite_search_of_a_finished_game_still_waits_for_stop() {
     let mut bear = Bear::start();
     // Stalemate: there is nothing to search.

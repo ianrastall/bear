@@ -33,10 +33,7 @@ fn solve(longest: i32) -> usize {
     };
     let stop = AtomicBool::new(false);
     let tt = TranspositionTable::new(16);
-    let shared = Shared {
-        stop: &stop,
-        tt: &tt,
-    };
+    let shared = Shared::new(&stop, &tt);
 
     let mut tried = 0;
     let mut failures = Vec::new();

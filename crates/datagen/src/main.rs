@@ -113,10 +113,7 @@ fn openings(options: &Options) -> Result<(), String> {
     let mut rng = Rng(options.seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1);
     let stop = AtomicBool::new(false);
     let tt = TranspositionTable::new(TranspositionTable::DEFAULT_MB);
-    let shared = Shared {
-        stop: &stop,
-        tt: &tt,
-    };
+    let shared = Shared::new(&stop, &tt);
     let limits = Limits::depth(options.depth);
     let mut thread = ThreadData::new(Hce::default());
 
@@ -159,10 +156,7 @@ fn mates(options: &Options) -> Result<(), String> {
     let mut rng = Rng(options.seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1);
     let stop = AtomicBool::new(false);
     let tt = TranspositionTable::new(TranspositionTable::DEFAULT_MB);
-    let shared = Shared {
-        stop: &stop,
-        tt: &tt,
-    };
+    let shared = Shared::new(&stop, &tt);
     let shallow = Limits::depth(3);
     let deep = Limits::depth(2 * options.max_mate - 1);
     let mut thread = ThreadData::new(Hce::default());

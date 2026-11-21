@@ -167,10 +167,7 @@ pub fn run(args: &[String]) -> Result<(), String> {
                 .spawn_scoped(scope, move || {
                     let stop = AtomicBool::new(false);
                     let tt = TranspositionTable::new(4);
-                    let shared = Shared {
-                        stop: &stop,
-                        tt: &tt,
-                    };
+                    let shared = Shared::new(&stop, &tt);
                     (worker..options.games)
                         .step_by(workers)
                         .filter_map(|index| play(index, options, shared))

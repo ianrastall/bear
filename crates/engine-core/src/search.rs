@@ -4,7 +4,7 @@
 //! [`ThreadData`] holds what one search thread keeps between searches. A search borrows
 //! it together with the [`Shared`] state for the duration of one `go`.
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use crate::eval::Evaluator;
@@ -85,12 +85,43 @@ fn lmr_table() -> Box<[[i32; 64]]> {
 /// How many quiet moves a node remembers having tried, for the history penalty.
 const MAX_QUIETS: usize = 64;
 
+/// One thread's node count as last published, on a cache line of its own so that
+/// threads publishing at the same time do not slow each other down.
+#[derive(Default)]
+#[repr(align(64))]
+pub struct NodeCounter(AtomicU64);
+
+/// How often, in nodes, a thread publishes its count and looks at the stop flag.
+const PUBLISH_MASK: u64 = 1023;
+
 /// What a search shares with other threads, borrowed for the length of one `go`.
 #[derive(Copy, Clone)]
 pub struct Shared<'a> {
     /// Set to make a running search return as soon as it can.
     pub stop: &'a AtomicBool,
     pub tt: &'a TranspositionTable,
+    /// One counter for each thread of the search; empty when there is only one.
+    pub counters: &'a [NodeCounter],
+    /// This thread's index. Thread 0 is the main thread: it starts the search's
+    /// generation in the table and its node limit counts every thread's nodes.
+    pub thread: usize,
+}
+
+impl<'a> Shared<'a> {
+    /// The shared state of a search on a single thread.
+    pub fn new(stop: &'a AtomicBool, tt: &'a TranspositionTable) -> Shared<'a> {
+        Shared {
+            stop,
+            tt,
+            counters: &[],
+            thread: 0,
+        }
+    }
+
+    /// Counters for a search on `threads` threads.
+    pub fn counters(threads: usize) -> Box<[NodeCounter]> {
+        (0..threads).map(|_| NodeCounter::default()).collect()
+    }
 }
 
 /// What the search knows after completing an iteration.
@@ -131,6 +162,40 @@ pub fn mate_in(score: i32) -> Option<i32> {
     } else {
         None
     }
+}
+
+/// Which thread's result to play when several searched the same position. Each
+/// thread backs its best move with its completed depth times how far its score is
+/// above the lowest one; the move with the most backing wins, played by the
+/// strongest thread that chose it. A proven mate overrides the vote, the shortest
+/// one first.
+pub fn vote(outcomes: &[Outcome]) -> usize {
+    let lowest = outcomes.iter().map(|o| o.score).min().unwrap_or(0);
+    let weight = |o: &Outcome| i64::from(o.score - lowest + 14) * i64::from(o.depth);
+    let backing =
+        |mv: Option<Move>| -> i64 { (outcomes.iter()).filter(|o| o.best == mv).map(weight).sum() };
+    let mut chosen = 0;
+    for (index, candidate) in outcomes.iter().enumerate().skip(1) {
+        let current = &outcomes[chosen];
+        if candidate.best.is_none() || candidate.depth == 0 {
+            continue;
+        }
+        let better = if current.best.is_none() || current.depth == 0 {
+            true
+        } else if current.score > MATE_BOUND {
+            candidate.score > current.score
+        } else if candidate.score > MATE_BOUND {
+            true
+        } else {
+            let (mine, theirs) = (backing(candidate.best), backing(current.best));
+            candidate.score > -MATE_BOUND
+                && (mine > theirs || (mine == theirs && weight(candidate) > weight(current)))
+        };
+        if better {
+            chosen = index;
+        }
+    }
+    chosen
 }
 
 #[derive(Clone)]
@@ -219,7 +284,9 @@ impl<E: Evaluator> ThreadData<E> {
         mut on_iteration: impl FnMut(&Report),
     ) -> Outcome {
         let start = Instant::now();
-        shared.tt.new_search();
+        if shared.thread == 0 {
+            shared.tt.new_search();
+        }
         let stm = self.positions[0].stm();
         let budget = TimeBudget::new(limits, stm, overhead_ms);
         let adaptive_time = budget.hard.is_some() && limits.movetime.is_none();
@@ -235,6 +302,7 @@ impl<E: Evaluator> ThreadData<E> {
             hard: budget.hard,
             node_limit: limits.nodes,
             nodes: 0,
+            others: 0,
             seldepth: 0,
             stopped: false,
             can_stop: false,
@@ -243,6 +311,9 @@ impl<E: Evaluator> ThreadData<E> {
             nmp_min_ply: 0,
             root_depth: 0,
         };
+        if let Some(counter) = shared.counters.get(shared.thread) {
+            counter.0.store(0, Ordering::Relaxed);
+        }
 
         let root_moves = worker.legal_root_moves(adaptive_time);
         let mut outcome = Outcome {
@@ -318,7 +389,7 @@ impl<E: Evaluator> ThreadData<E> {
                 depth,
                 seldepth: worker.seldepth,
                 score,
-                nodes: worker.nodes,
+                nodes: worker.total_nodes(),
                 elapsed,
                 hashfull: shared.tt.hashfull(),
                 pv: &pv,
@@ -348,6 +419,8 @@ struct Worker<'a, E: Evaluator> {
     hard: Option<Duration>,
     node_limit: Option<u64>,
     nodes: u64,
+    /// The other threads' nodes, as last read by this one.
+    others: u64,
     seldepth: usize,
     stopped: bool,
     /// False until the first iteration has produced a move.
@@ -378,18 +451,37 @@ impl<E: Evaluator> Worker<'_, E> {
         }
     }
 
+    /// This thread's nodes and the other threads' as last published.
+    fn total_nodes(&self) -> u64 {
+        let others: u64 = (self.shared.counters.iter().enumerate())
+            .filter(|&(thread, _)| thread != self.shared.thread)
+            .map(|(_, counter)| counter.0.load(Ordering::Relaxed))
+            .sum();
+        self.nodes + others
+    }
+
     /// Counts a node and decides whether the search has to end.
     #[inline]
     fn enter_node(&mut self, ply: usize) {
         self.nodes += 1;
         self.seldepth = self.seldepth.max(ply);
+        let publish = self.nodes & PUBLISH_MASK == 0;
+        if publish && let Some(counter) = self.shared.counters.get(self.shared.thread) {
+            counter.0.store(self.nodes, Ordering::Relaxed);
+            if self.node_limit.is_some() {
+                self.others = self.total_nodes() - self.nodes;
+            }
+        }
         if !self.can_stop {
             return;
         }
-        if self.node_limit.is_some_and(|limit| self.nodes >= limit) {
+        if self
+            .node_limit
+            .is_some_and(|limit| self.nodes + self.others >= limit)
+        {
             self.stopped = true;
         }
-        if self.nodes & 1023 == 0 && self.shared.stop.load(Ordering::Relaxed) {
+        if publish && self.shared.stop.load(Ordering::Relaxed) {
             self.stopped = true;
         }
         if let Some(hard) = self.hard {
@@ -1034,10 +1126,7 @@ mod tests {
         }
 
         fn shared(&self) -> Shared<'_> {
-            Shared {
-                stop: &self.stop,
-                tt: &self.tt,
-            }
+            Shared::new(&self.stop, &self.tt)
         }
     }
 
@@ -1146,6 +1235,40 @@ mod tests {
         assert!(outcome.score > 300);
     }
 
+    #[test]
+    fn vote_prefers_backed_moves_and_short_mates() {
+        let (pos, ci) = Position::startpos();
+        let e4 = find_uci_move(&pos, &ci, "e2e4");
+        let d4 = find_uci_move(&pos, &ci, "d2d4");
+        let outcome = |best, score, depth| Outcome {
+            best,
+            ponder: None,
+            score,
+            depth,
+            nodes: 0,
+        };
+        // Two threads back d4 against one deeper thread on e4.
+        let split = [
+            outcome(e4, 30, 12),
+            outcome(d4, 25, 10),
+            outcome(d4, 25, 10),
+        ];
+        assert_eq!(vote(&split), 1);
+        // A thread that has not completed an iteration has no say.
+        let unfinished = [outcome(None, 0, 0), outcome(e4, 20, 8)];
+        assert_eq!(vote(&unfinished), 1);
+        // A shorter mate wins over any vote.
+        let mates = [
+            outcome(e4, 40, 20),
+            outcome(e4, 40, 20),
+            outcome(d4, MATE - 9, 15),
+            outcome(e4, MATE - 5, 12),
+        ];
+        assert_eq!(vote(&mates), 3);
+        // With one thread there is nothing to decide.
+        assert_eq!(vote(&[outcome(e4, -50, 9)]), 0);
+    }
+
     fn worker<'a>(td: &'a mut ThreadData<Hce>, shared: Shared<'a>) -> Worker<'a, Hce> {
         Worker {
             td,
@@ -1154,6 +1277,7 @@ mod tests {
             hard: None,
             node_limit: None,
             nodes: 0,
+            others: 0,
             seldepth: 0,
             stopped: false,
             can_stop: false,

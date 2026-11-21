@@ -114,6 +114,7 @@ mod tests {
                 .iter()
                 .any(|l| l.starts_with("option name Move Overhead type spin"))
         );
+        assert!(lines.contains(&"option name Threads type spin default 1 min 1 max 256"));
         assert!(lines.contains(&"option name UCI_Chess960 type check default false"));
         assert_eq!(lines[lines.len() - 2], "uciok");
         assert_eq!(lines[lines.len() - 1], "readyok");
@@ -177,6 +178,20 @@ mod tests {
     }
 
     #[test]
+    fn several_threads_search_and_agree_on_one_move() {
+        // The end of the input cuts each search short after its first iteration.
+        let out = session(
+            "setoption name Threads value 4\nposition startpos moves e2e4\ngo depth 8\n\
+             position fen 7k/8/8/8/8/8/8/R5K1 w - - 0 1\ngo nodes 20000\nucinewgame\n\
+             position fen 7k/5Q2/6K1/8/8/8/8/8 b - - 0 1\ngo depth 3\n",
+        );
+        let answers: Vec<&str> = out.lines().filter(|l| l.starts_with("bestmove")).collect();
+        assert_eq!(answers.len(), 3, "{out}");
+        assert_ne!(answers[0], "bestmove 0000", "{out}");
+        assert_eq!(answers[2], "bestmove 0000", "{out}");
+    }
+
+    #[test]
     fn go_with_no_legal_move() {
         let out = session("position fen 7k/5Q2/6K1/8/8/8/8/8 b - - 0 1\ngo depth 2\n");
         assert_eq!(out.lines().last(), Some("bestmove 0000"));
@@ -211,7 +226,11 @@ mod tests {
         assert_eq!(session("setoption name Move Overhead value 50\n"), "");
         assert_eq!(session("setoption name Hash value 4\n"), "");
         assert!(session("setoption name Hash value big\n").contains("needs a number"));
-        assert!(session("setoption name Threads value 2\n").contains("info string unknown option"));
+        assert_eq!(session("setoption name Threads value 2\n"), "");
+        assert!(session("setoption name Threads value many\n").contains("needs a number"));
+        assert!(
+            session("setoption name Contempt value 2\n").contains("info string unknown option")
+        );
         assert!(session("setoption name Move Overhead value lots\n").contains("needs a number"));
     }
 

@@ -6,10 +6,14 @@
 //! written by two threads at once reads as a miss and the access path needs no lock
 //! and no `unsafe`. Four slots share one cache line.
 
+mod memory;
+
 use std::sync::atomic::{AtomicU8, AtomicU64, Ordering::Relaxed};
 
 use crate::Move;
 use crate::search::{MATE, MATE_BOUND};
+pub use memory::Pages;
+use memory::ZeroedBlock;
 
 /// What a stored score says about the true score of its position.
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
@@ -154,7 +158,7 @@ struct Cluster([Slot; 4]);
 const _: () = assert!(size_of::<Cluster>() == 64);
 
 pub struct TranspositionTable {
-    clusters: Box<[Cluster]>,
+    clusters: ZeroedBlock<Cluster>,
     /// Counts searches, so that entries left by earlier ones can be told apart.
     generation: AtomicU8,
 }
@@ -166,7 +170,7 @@ impl TranspositionTable {
     /// A table of `megabytes`, or as near as memory allows.
     pub fn new(megabytes: usize) -> TranspositionTable {
         let mut table = TranspositionTable {
-            clusters: Box::default(),
+            clusters: ZeroedBlock::empty(),
             generation: AtomicU8::new(0),
         };
         table.resize(megabytes);
@@ -177,19 +181,26 @@ impl TranspositionTable {
     /// obtained, which is smaller when the request cannot be allocated. The old table
     /// is freed first, so the two never exist together.
     pub fn resize(&mut self, megabytes: usize) -> usize {
-        self.clusters = Box::default();
+        self.clusters = ZeroedBlock::empty();
         let mut megabytes = megabytes.clamp(1, Self::MAX_MB);
         loop {
             let count = megabytes * (1 << 20) / size_of::<Cluster>();
-            let mut clusters = Vec::new();
-            if clusters.try_reserve_exact(count).is_ok() {
-                clusters.resize_with(count, Cluster::default);
-                self.clusters = clusters.into_boxed_slice();
+            #[allow(unsafe_code)]
+            // SAFETY: a cluster is four pairs of `AtomicU64`, and all-zero memory is
+            // a valid `AtomicU64` holding 0: every slot starts empty.
+            let block = unsafe { ZeroedBlock::new(count) };
+            if let Some(clusters) = block {
+                self.clusters = clusters;
                 self.generation.store(0, Relaxed);
                 return megabytes;
             }
             megabytes = (megabytes / 2).max(1);
         }
+    }
+
+    /// Whether the table sits in large pages or ordinary memory.
+    pub fn pages(&self) -> Pages {
+        self.clusters.pages()
     }
 
     pub fn megabytes(&self) -> usize {
@@ -198,11 +209,30 @@ impl TranspositionTable {
 
     /// Forgets everything.
     pub fn clear(&self) {
-        for cluster in &self.clusters {
-            for slot in &cluster.0 {
-                slot.data.store(0, Relaxed);
-                slot.check.store(0, Relaxed);
+        self.clear_parallel(1);
+    }
+
+    /// Forgets everything, with `threads` threads sharing the work, which matters
+    /// for tables of many gigabytes.
+    pub fn clear_parallel(&self, threads: usize) {
+        fn wipe(clusters: &[Cluster]) {
+            for cluster in clusters {
+                for slot in &cluster.0 {
+                    slot.data.store(0, Relaxed);
+                    slot.check.store(0, Relaxed);
+                }
             }
+        }
+        let threads = threads.clamp(1, self.clusters.len().max(1));
+        if threads == 1 {
+            wipe(&self.clusters[..]);
+        } else {
+            let chunk = self.clusters.len().div_ceil(threads);
+            std::thread::scope(|scope| {
+                for part in self.clusters.chunks(chunk) {
+                    scope.spawn(move || wipe(part));
+                }
+            });
         }
         self.generation.store(0, Relaxed);
     }
@@ -458,5 +488,20 @@ mod tests {
         assert_eq!(tt.resize(1), 1);
         assert_eq!(tt.megabytes(), 1);
         assert_eq!(tt.probe(99), None);
+    }
+
+    #[test]
+    fn parallel_clear_reaches_every_cluster() {
+        let tt = TranspositionTable::new(1);
+        let clusters = tt.clusters.len() as u64;
+        let keys: Vec<u64> = (0..clusters)
+            .map(|i| i * (u64::MAX / clusters + 1))
+            .collect();
+        for &key in &keys {
+            tt.store(key, entry(3, Bound::Exact));
+        }
+        tt.clear_parallel(7);
+        assert!(keys.iter().all(|&key| tt.probe(key).is_none()));
+        assert_eq!(tt.hashfull(), 0);
     }
 }
