@@ -6,7 +6,7 @@ The design is in [docs/architecture.md](docs/architecture.md): board representat
 
 ## Status
 
-Milestone M5 is in progress. Bear plays standard chess and Chess960 through any UCI interface. Its hand-crafted evaluator scores pawn structure, passed pawns, mobility and king safety alongside material and piece-square tables. The adaptive clock adjusts its time budget using move stability, score changes and effort spent on the leading move. History and fitted evaluation weights are in strength testing.
+Milestone M6 (multi-threaded search) is in progress. Bear plays standard chess and Chess960 through any UCI interface. Its hand-crafted evaluator scores pawn structure, passed pawns, mobility and king safety alongside material and piece-square tables, with weights fitted to Bear's own games, and correction history adjusts it from search results. The adaptive clock adjusts its time budget using move stability, score changes and effort spent on the leading move. The M5 build's local CCRL-anchored rating estimate is 3,064 (95% interval 2,976–3,177); see section 7.4 of the architecture document.
 
 ## Building
 
@@ -25,6 +25,7 @@ Point a chess interface that speaks UCI at the `bear` binary. Supported commands
 | Option | Meaning |
 |---|---|
 | `Hash` | Size of the transposition table in megabytes. Default 16. |
+| `Threads` | Search threads. Default 1. |
 | `Move Overhead` | Milliseconds kept back from the clock on every move for communication delay. Default 10. |
 | `UCI_Chess960` | Write castling as king takes rook. Castling is accepted in either notation regardless. |
 
@@ -57,7 +58,7 @@ datagen openings --out <file> [--count N] [--plies P] [--seed S] [--depth D] [--
 datagen mates --out <file> [--count N] [--max-mate M] [--plies P] [--seed S]
 datagen selfplay --out <file> [--games N] [--nodes N] [--seed S] [--workers N]
 datagen tune --input <selfplay file> --out <weights.rs> [--epochs N]
-cargo xtask sprt --base <revision or engine file> [--new <engine file>] [--bounds <name>]
+cargo xtask sprt --base <revision or engine file> [--new <engine file>] [--bounds <name>] [--tc <tc>] [--threads N]
 ```
 
 `perft fuzz` plays random games and compares the per-move counts of every position with another UCI engine's `go perft` output. The other engine is only run as a separate program.

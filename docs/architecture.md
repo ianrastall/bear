@@ -434,27 +434,28 @@ Values are 100/300/300/500/900. Castling returns `threshold ≤ 0`.
 
 ```rust
 pub struct History {
-    main:    [[[[i16; 2]; 2]; 4096]; 2],        // [stm][from·64+to][from attacked][to attacked]
-    capture: [[[i16; 6]; 64]; 12],              // [moved piece][to][captured type]
-    cont:    [[[[i16; 64]; 12]; 64]; 12],       // [previous piece][previous to][piece][to]
-    counter: [[Option<Move>; 64]; 12],          // [previous piece][previous to]
+    main:     [[[[i16; 2]; 2]; 4096]; 2],       // [stm][from·64+to][from attacked][to attacked]
+    captures: [[[i16; 6]; 64]; 12],             // [moved piece][to][captured type]
 }
 #[inline] fn gravity<const MAX: i32>(h: &mut i16, bonus: i32) {
     let b = bonus.clamp(-MAX, MAX);
-    *h += (b - *h as i32 * b.abs() / MAX) as i16;       // |h| ≤ MAX is a fixed point; MAX = 16384
+    let old = *h as i32;
+    *h = (old + b - old * b.abs() / MAX) as i16;        // |h| ≤ MAX is a fixed point; MAX = 16384
 }
 ```
 
-- Quiet ordering score: `main + 2·cont[ply−1] + cont[ply−2] + cont[ply−4] / 2`.
+- Quiet ordering score: `main`.
+- Capture ordering score: `16 · (1000 + 16 · (victim + 1) − attacker) + captures / 256`, so that capture history only breaks ties within a victim and attacker group. Promotions add `1600 · (piece + 1)`.
 - Bonus `min(170·depth − 50, 1800)`; malus `min(150·depth − 30, 1500)`.
-- On a quiet beta cutoff: bonus to the best move in `main` and `cont` at plies −1, −2 and −4; malus to every quiet searched before it; shift killers; set the countermove.
+- On a quiet beta cutoff: bonus to the best move in `main`, malus to every quiet searched before it, and shift killers.
 - On any cutoff: capture-history bonus if the best move is a capture, and malus to the captures searched before it.
+- Continuation history (`[previous piece][previous to][piece][to]` one, two and four plies back) and countermoves were tried and are not used: continuation history lost its M5 SPRT (section 7.4).
 
-**Correction history** is shared across threads (section 6.1). Tables are `[[AtomicI16; 16384]; 2]`, indexed by `pawn_key`, by each `non_pawn_key`, and by the previous move's piece and target square. The update runs when the node is not in check, the best move is quiet or absent, and the score does not contradict the bound direction:
+**Correction history** belongs to each thread. Three tables of `[[i16; 2]; 16384]` (by side to move) are indexed by `pawn_key` and by each side's `non_pawn_key`, and a fourth by the previous move's piece and target square. The update runs when the node is not in check, the best move is quiet, the score is not a mate score and it does not contradict the bound direction:
 
-`gravity::<1024>(entry, clamp((best − static_eval) · depth / 8, −256, 256))`
+`gravity::<1024>(entry, clamp((best − corrected_eval) · depth / 8, −256, 256))`
 
-The correction applied is the weighted sum of the tables divided by 512.
+The correction applied is `(192 · pawn + 96 · white + 96 · black + 128 · previous) / 2048`, so that entries at their limit move the evaluation by 256 centipawns. The transposition table keeps the uncorrected evaluation.
 
 ### 4.4 Selectivity, extensions and reductions
 
@@ -840,22 +841,34 @@ The published evaluator (`e25093c`, bench 4,154,595) played the same 120-game ga
 | Blunder 7.6.0 64-bit | 34 | 3 | 3 |
 | Weiss 1.0 64-bit | 16 | 13 | 11 |
 
-A second Texel dataset used 2,000 Bear games at 5,000 nodes per move with seed `20261121`. It yielded 36,395 training positions and 9,109 held-out positions. The constrained fit reduced held-out log loss from 0.489372 to 0.488397. At the 720-game report against the published hand-written weights, it had 252 wins, 239 draws and 229 losses for +11 ± 21 Elo and an LLR of 0.51. The `[0, 10]` SPRT acceptance boundary was 2.94.
+A second Texel dataset used 2,000 Bear games at 5,000 nodes per move with seed `20261121`. It yielded 36,395 training positions and 9,109 held-out positions. The constrained fit reduced held-out log loss from 0.489372 to 0.488397. At the 720-game report against the published hand-written weights, it had 252 wins, 239 draws and 229 losses for +11 ± 21 Elo and an LLR of 0.51. Resumed to a decision, it passed after 1,786 games.
 
-The individual history trials used `[0, 10]` SPRTs at 8+0.08. These are the last reported scores for each candidate on the expanded evaluator.
+Early history trials on the expanded evaluator were stopped undecided after 60 to 220 games each (capture history −7 ± 43, with quiescence updates 0 ± 71, continuation history +2 ± 39, damped correction history −12 ± 41). The final history candidates were rebuilt with each term scaled for the expanded evaluator and run to a decision against the published evaluator and clock (`5a5b8ea`); the fitted weights were tested against the published hand-written weights (`e25093c`). All used `[0, 10]` SPRTs at 8+0.08, paired `bear-8ply.epd` openings and 16 MiB hash, with no crashes, illegal moves or time losses.
 
-| Candidate | Reference search | Games | Elo | LLR |
-|---|---|---:|---:|---:|
-| Capture history | Published M4 search | 140 | −7 ± 43 | −0.17 |
-| Capture history with quiescence updates | Published M4 search | 60 | 0 ± 71 | −0.02 |
-| Continuation history | Experimental capture history | 220 | +2 ± 39 | −0.06 |
-| Damped correction history | Published M4 search | 180 | −12 ± 41 | −0.29 |
+| Candidate | Games | Wins | Draws | Losses | Elo | Outcome |
+|---|---:|---:|---:|---:|---:|---|
+| Fitted weights | 1,786 | 636 | 613 | 537 | +19 ± 12 | Passed |
+| Correction history | 876 | 325 | 316 | 235 | +36 ± 18 | Passed |
+| Capture history ordering | 4,350 | 1,386 | 1,701 | 1,263 | +10 ± 8 | Passed |
+| Continuation history | 1,398 | 421 | 491 | 486 | −16 ± 14 | Failed |
+
+Each passing candidate was reimplemented on `main` and checked to give the tested build's bench before it was committed: the fitted weights (`aa14ae3`), correction history (`d76441e`) and capture history ordering (`52b9201`).
 
 The adaptive clock passed its standalone `[0, 10]` SPRT at 8+0.08 against `e25093c` with 319 wins, 258 draws and 233 losses in 810 games. The result was +37 ± 18 Elo and a final LLR of 2.95. There were no crashes, illegal moves or time losses. The depth-14 bench remains 4,154,595 nodes.
 
 The published evaluator and adaptive clock (`5a5b8ea`) passed the `[0, 10]` SPRT against M4 (`8469a67`) at 40+0.4 with 140 wins, 20 draws and 8 losses in 168 games. That is an 89.29% score, +368 ± 74 Elo and a final LLR of 2.96. The match used paired `bear-8ply.epd` openings, seed `4378986340156334659` and 16 MiB hash. It resumed from a 40-game checkpoint with concurrency raised from 8 to 14. There were no crashes, illegal moves or time losses.
 
-M5 remains open until capture history, continuation history, correction history and a fitted weight set each pass their strength gate.
+The fitted weights with correction history (`d76441e`, bench 4,562,617) passed the `[0, 10]` SPRT against `5a5b8ea` at 40+0.4 with 124 wins, 110 draws and 42 losses in 276 games, +106 ± 28 Elo and a final LLR of 2.97, without crashes, illegal moves or time losses.
+
+**M5 result.** The final M5 build (`52b9201`, bench 4,302,421) played the 120-game gauntlet described above and scored 99 wins, 13 draws and 8 losses without crashes, illegal moves or time losses. Its local CCRL-anchored estimate is **3,064 Elo**, with a paired-opening 95% interval of 2,976–3,177. The 3,000 target needs the lower end of that interval above 3,000, which is left to the NNUE milestones.
+
+| Opponent | Wins | Draws | Losses |
+|---|---:|---:|---:|
+| CT800 1.40 64-bit | 40 | 0 | 0 |
+| Blunder 7.6.0 64-bit | 34 | 3 | 3 |
+| Weiss 1.0 64-bit | 25 | 10 | 5 |
+
+Continuation history did not pass its gate and is not used.
 
 **M4.** The individual tests used fastchess 1.8.2 at 8+0.08, with `[0, 10]` Elo bounds. No recorded game in the tests below ended in a crash, illegal move or time loss.
 
