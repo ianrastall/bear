@@ -491,6 +491,8 @@ mod tests {
     }
 
     #[test]
+    // Thousands of atomic stores on seven threads take hours under Miri.
+    #[cfg_attr(miri, ignore)]
     fn parallel_clear_reaches_every_cluster() {
         let tt = TranspositionTable::new(1);
         let clusters = tt.clusters.len() as u64;
